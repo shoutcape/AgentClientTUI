@@ -1,0 +1,93 @@
+<h2>AgentClientTUI visual direction</h2>
+<p class="subtitle">Three ways to move closer to OpenCode's terminal style without losing ACP-client identity. Click one if a direction feels right.</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0a0a0a;color:#eee;font-family:ui-monospace,monospace;border:1px solid #484848;border-radius:10px;overflow:hidden;height:260px;display:grid;grid-template-columns:1fr 190px;">
+        <div style="padding:12px;display:flex;flex-direction:column;gap:10px;">
+          <div style="color:#808080">/home/shoutcape/github/AgentClientTUI</div>
+          <div style="color:#7fd88f">● user</div>
+          <div>can you inspect this repo?</div>
+          <div style="color:#fab283">◆ assistant</div>
+          <div style="color:#eee">Reading files and checking ACP server capabilities...</div>
+          <div style="border-left:3px solid #9d7cd8;background:#141414;padding:8px;color:#808080">tool: readTextFile<br><span style="color:#eee">src/index.ts</span></div>
+          <div style="margin-top:auto;border-top:1px solid #3c3c3c;padding-top:8px;color:#808080">type message... <span style="color:#fab283">enter</span> send</div>
+        </div>
+        <div style="background:#141414;border-left:1px solid #484848;padding:12px;display:flex;flex-direction:column;gap:8px;">
+          <b>AgentClientTUI</b>
+          <span style="color:#808080">session mock-session-1</span>
+          <span style="color:#7fd88f">● connected</span>
+          <span style="color:#56b6c2">⊙ 1 ACP</span>
+          <span style="color:#808080;margin-top:auto">OpenCode-like</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A. Closest OpenCode Feel</h3>
+      <p>Dark background, right sidebar, muted footer, message transcript, tool blocks, OpenCode color palette.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0a0a0a;color:#eee;font-family:ui-monospace,monospace;border:1px solid #323232;border-radius:10px;height:260px;display:flex;flex-direction:column;overflow:hidden;">
+        <div style="background:#141414;border-bottom:1px solid #3c3c3c;padding:8px 12px;display:flex;justify-content:space-between;">
+          <span><b style="color:#fab283">Agent</b>ClientTUI</span>
+          <span style="color:#808080">opencode serve · connected</span>
+        </div>
+        <div style="flex:1;padding:12px;display:flex;flex-direction:column;gap:10px;">
+          <div style="color:#808080">ACP session mock-session-1</div>
+          <div style="border-left:3px solid #5c9cf5;padding-left:8px"><span style="color:#5c9cf5">user</span><br>summarize this project</div>
+          <div style="border-left:3px solid #fab283;background:#141414;padding:8px"><span style="color:#fab283">assistant</span><br>This is an ACP terminal client...</div>
+          <div style="display:flex;gap:8px;color:#808080;margin-top:auto"><span>/status</span><span>ctrl+c</span><span>esc cancel</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B. Inspired, Simpler</h3>
+      <p>Same palette and hierarchy, but one-column layout. Easier first step, less like a direct clone.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background:#0a0a0a;color:#eee;font-family:ui-monospace,monospace;border:1px solid #484848;border-radius:10px;height:260px;display:grid;grid-template-rows:auto 1fr auto;overflow:hidden;">
+        <div style="padding:8px 12px;background:#141414;border-bottom:1px solid #3c3c3c;display:flex;gap:14px;">
+          <span style="color:#fab283">ACP</span><span>opencode serve</span><span style="color:#7fd88f">● initialized</span><span style="color:#808080">capabilities: fs off · terminal off</span>
+        </div>
+        <div style="padding:12px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div style="border:1px solid #323232;background:#141414;padding:10px"><b>conversation</b><br><br><span style="color:#5c9cf5">user</span> send prompt<br><span style="color:#fab283">agent</span> streaming update</div>
+          <div style="border:1px solid #323232;background:#141414;padding:10px"><b>protocol</b><br><br><span style="color:#808080">initialize ✓</span><br><span style="color:#808080">session/new ✓</span><br><span style="color:#808080">session/update 2</span></div>
+        </div>
+        <div style="padding:8px 12px;border-top:1px solid #3c3c3c;color:#808080">prompt ▸ _</div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C. ACP Dashboard</h3>
+      <p>Still OpenCode-ish, but leans into ACP interoperability: capabilities, protocol state, server identity.</p>
+    </div>
+  </div>
+</div>
+
+<div class="pros-cons">
+  <div class="pros">
+    <h4>OpenCode cues to borrow</h4>
+    <ul>
+      <li>Near-black background, dark panels</li>
+      <li>Muted gray metadata</li>
+      <li>Orange primary, blue secondary, purple accent</li>
+      <li>Subtle borders, especially vertical split borders</li>
+      <li>Footer/status hints instead of loud chrome</li>
+    </ul>
+  </div>
+  <div class="cons">
+    <h4>Things to avoid</h4>
+    <ul>
+      <li>Copying branding too closely</li>
+      <li>Adding sidebar before we have useful data</li>
+      <li>Visual polish that hides protocol errors</li>
+      <li>Three.js effects before prompt UX works</li>
+    </ul>
+  </div>
+</div>

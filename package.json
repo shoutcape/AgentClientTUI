@@ -1,0 +1,24 @@
+{
+  "name": "agent-client-tui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Interactive terminal UI for ACP-compatible agent servers.",
+  "scripts": {
+    "dev": "$HOME/.bun/bin/bun run src/index.ts",
+    "dev:node": "tsx src/index.ts",
+    "mock-agent": "$HOME/.bun/bin/bun run src/mock-agent.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "test": "$HOME/.bun/bin/bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@opentui/core": "latest"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}
