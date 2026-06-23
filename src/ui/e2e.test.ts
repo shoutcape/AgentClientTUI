@@ -21,6 +21,10 @@ function createMockCommandRegistry(): CommandRegistry {
       subcommands: ["show", "add", "clear"],
     },
     { name: "/long", description: "Stream a long mock transcript response", source: "acp" },
+    ...Array.from({ length: 16 }, (_, i) => {
+      const n = i + 1
+      return { name: `/mock-${n}`, description: `Mock command ${n}`, source: "acp" as const }
+    }),
   ])
   registry.addLocalCommand({ name: "Quit", description: "Exit AgentClientTUI", source: "local" })
   return registry
@@ -68,7 +72,80 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("slash dropdown is attached above the input bar", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      await testRenderer.flush()
+
+      const lines = testRenderer.captureCharFrame().split("\n")
+      const dropdownIndex = lines.findIndex((line) => line.includes("/model") && line.includes("Switch mock model"))
+      const inputIndex = lines.findIndex((line) => line.includes("│ >"))
+
+      expect(dropdownIndex).toBeGreaterThan(-1)
+      expect(inputIndex).toBeGreaterThan(-1)
+      expect(dropdownIndex).toBeLessThan(inputIndex)
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("slash dropdown scrolls through many mock commands", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      await testRenderer.flush()
+
+      for (let i = 0; i < 15; i += 1) {
+        testRenderer.mockInput.pressArrow("down")
+        await testRenderer.flush()
+      }
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("/mock-12")
+      expect(frame).toContain("Mock command 12")
+      expect(frame).not.toContain("/model - Switch mock model")
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("ctrl-p opens palette with local and mock ACP commands", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      testRenderer.mockInput.pressKey("p", { ctrl: true })
+      await testRenderer.flush()
+
+      let frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("/model")
+      expect(frame).toContain("/context")
+
+      await testRenderer.mockInput.typeText("Quit")
+      await testRenderer.flush()
+
+      frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("Quit")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("ctrl-p palette is a global modal with a transparent backdrop", async () => {
     const testRenderer = await createTestRenderer({ width: 120, height: 34 })
     const ui = await createAgentClientUi({
       registry: createMockCommandRegistry(),
@@ -81,8 +158,9 @@ describe("OpenTUI command e2e", () => {
 
       const frame = testRenderer.captureCharFrame()
       expect(frame).toContain("/model")
-      expect(frame).toContain("/context")
-      expect(frame).toContain("Quit")
+      expect(frame).toContain("● starting")
+      expect(frame).toContain("session")
+      expect(frame).toContain("/ commands")
     } finally {
       ui.destroy()
     }

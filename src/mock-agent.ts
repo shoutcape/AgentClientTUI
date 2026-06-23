@@ -28,6 +28,11 @@ const modelOptions = [
   { label: "haiku", value: "haiku", description: "Fast mock model" },
 ]
 
+const highCountCommands = Array.from({ length: 16 }, (_, i) => {
+  const n = i + 1
+  return { name: `/mock-${n}`, description: `Mock command ${n}`, meta: {} }
+})
+
 function announceCommands(): void {
   write({
     jsonrpc: "2.0",
@@ -47,6 +52,7 @@ function announceCommands(): void {
         },
         { name: "/long", description: "Stream a long mock transcript response", meta: {} },
         { name: "/fail", description: "Return a mock prompt error", meta: {} },
+        ...highCountCommands,
       ],
       prompts: [],
       tools: [],

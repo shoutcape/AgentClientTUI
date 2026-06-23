@@ -2,7 +2,10 @@ import { Box, Text } from "@opentui/core"
 import type { CommandState } from "../commands/state"
 import { opencodeTheme } from "./view"
 
-export function buildDropdown(state: Extract<CommandState, { phase: "listing" | "drilldown" }>, items: Array<{ name: string; description: string }>) {
+export function buildDropdown(
+  state: Extract<CommandState, { phase: "listing" | "drilldown" }>,
+  items: Array<{ name: string; description: string }>,
+) {
   const maxVisible = 8
   const scrollStart = Math.max(0, Math.min(state.selectedIndex - maxVisible + 1, items.length - maxVisible))
   const visibleItems = items.slice(scrollStart, scrollStart + maxVisible)
@@ -37,13 +40,14 @@ export function buildDropdown(state: Extract<CommandState, { phase: "listing" | 
         paddingRight: 1,
       }
       if (selected) boxOpts.backgroundColor = opencodeTheme.primary
-      const description = item.description ? ` - ${item.description}` : ""
       children.push(
         Box(
           boxOpts,
           Text({
-            content: `${item.name}${description}`,
+            content: item.name + (item.description ? ` - ${item.description}` : ""),
             fg: selected ? opencodeTheme.background : opencodeTheme.text,
+            width: "100%",
+            wrapMode: "none",
           }),
         ),
       )
@@ -57,11 +61,12 @@ export function buildDropdown(state: Extract<CommandState, { phase: "listing" | 
     ),
   )
 
+  const totalHeight = 1 + (isLoading ? 1 : visibleItems.length) + 1
   return Box(
     {
       flexDirection: "column",
       width: "100%",
-      maxWidth: 60,
+      height: Math.min(totalHeight, 12),
       borderStyle: "single",
       borderColor: opencodeTheme.primary,
       backgroundColor: opencodeTheme.backgroundElement,

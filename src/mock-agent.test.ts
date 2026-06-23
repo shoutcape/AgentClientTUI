@@ -72,6 +72,7 @@ describe("mock ACP agent commands", () => {
           expect.objectContaining({ name: "/context", meta: expect.objectContaining({ inputType: "panel" }) }),
           expect.objectContaining({ name: "/long" }),
           expect.objectContaining({ name: "/fail" }),
+          expect.objectContaining({ name: "/mock-12", description: "Mock command 12" }),
         ]),
       },
     })

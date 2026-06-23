@@ -14,7 +14,7 @@ export function buildPalette(state: Extract<CommandState, { phase: "listing" | "
   if (state.phase === "drilldown") {
     itemRows.push(
       Box(
-        { flexDirection: "row", width: "100%", paddingLeft: 1 },
+        { flexDirection: "row", width: "100%", height: 1, paddingLeft: 1 },
         Text({ content: `\u27F5 ${state.parent.name} \u2014 ${state.parent.description}`, fg: opencodeTheme.textMuted }),
       ),
     )
@@ -23,7 +23,7 @@ export function buildPalette(state: Extract<CommandState, { phase: "listing" | "
   if (isLoading) {
     itemRows.push(
       Box(
-        { flexDirection: "row", paddingLeft: 1 },
+        { flexDirection: "row", height: 1, paddingLeft: 1 },
         Text({ content: "Loading...", fg: opencodeTheme.textMuted }),
       ),
     )
@@ -35,6 +35,7 @@ export function buildPalette(state: Extract<CommandState, { phase: "listing" | "
           {
             flexDirection: "row",
             width: "100%",
+            height: 1,
             paddingLeft: 1,
             paddingRight: 1,
             ...(selected ? { backgroundColor: opencodeTheme.accent } : {}),
@@ -58,6 +59,7 @@ export function buildPalette(state: Extract<CommandState, { phase: "listing" | "
       {
         flexDirection: "row",
         width: "100%",
+        height: 3,
         paddingLeft: 1,
         paddingRight: 1,
         borderStyle: "single",
@@ -68,7 +70,7 @@ export function buildPalette(state: Extract<CommandState, { phase: "listing" | "
     ),
     ...itemRows,
     Box(
-      { flexDirection: "row", paddingLeft: 1, paddingRight: 1 },
+      { flexDirection: "row", height: 1, paddingLeft: 1, paddingRight: 1 },
       Text({ content: "\u2191\u2193 navigate \u00B7 Enter select \u00B7 Esc close", fg: opencodeTheme.textMuted }),
     ),
   )

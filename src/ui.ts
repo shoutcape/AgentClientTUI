@@ -229,23 +229,12 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     const showDropdown = commandState.phase !== "idle" && "surface" in commandState && commandState.surface === "dropdown"
 
     const mainContent = (() => {
-      if (showPalette && (commandState.phase === "listing" || commandState.phase === "drilldown")) {
-        return Box(
-          { flexDirection: "column", flexGrow: 1, width: "100%", alignItems: "center", justifyContent: "center" },
-          buildPalette(commandState, getCommandItems()),
-        )
-      }
-
       if (panelOverlay) {
         return Box(
           { flexDirection: "column", flexGrow: 1, width: "100%", alignItems: "center", padding: 1 },
           buildPanelOverlay(panelOverlay.title, panelOverlay.content),
         )
       }
-
-      const dropdownElement = showDropdown && (commandState.phase === "listing" || commandState.phase === "drilldown")
-        ? [buildDropdown(commandState, getCommandItems())]
-        : []
 
       if (!transcriptScroll) {
         transcriptScroll = new ScrollBoxRenderable(renderer, {
@@ -281,7 +270,6 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             Text({ content: "transcript", fg: opencodeTheme.textMuted }),
             transcriptScroll,
           ),
-          ...dropdownElement,
         ),
         Box(
           {
@@ -306,6 +294,53 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       )
     })()
 
+    const dropdownElement = showDropdown && (commandState.phase === "listing" || commandState.phase === "drilldown")
+      ? buildDropdown(commandState, getCommandItems())
+      : null
+
+    const paletteElement = showPalette && (commandState.phase === "listing" || commandState.phase === "drilldown")
+      ? Box(
+          {
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: 0,
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+          },
+          buildPalette(commandState, getCommandItems()),
+        )
+      : null
+
+    const inputElement = Box(
+      {
+        flexDirection: "row",
+        width: "100%",
+        minHeight: 3,
+        backgroundColor: opencodeTheme.backgroundElement,
+        borderStyle: "single",
+        borderColor: opencodeTheme.borderSubtle,
+        paddingLeft: 1,
+        paddingRight: 1,
+        gap: 1,
+      },
+      Text({ content: inputBar.prompt, fg: inputBar.promptColor, attributes: TextAttributes.BOLD }),
+      Text({ content: inputBar.value ?? "", fg: inputBar.valueColor ?? opencodeTheme.text }),
+    )
+
+    const inputStack = Box(
+      { position: "relative", flexDirection: "column", width: "100%", height: 3 },
+      inputElement,
+      dropdownElement
+        ? Box(
+            { position: "absolute", left: 0, right: 0, bottom: 3 },
+            dropdownElement,
+          )
+        : null,
+    )
+
     renderer.root.add(
       Box(
         {
@@ -323,21 +358,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
           Text({ content: `● ${status}`, fg: opencodeTheme.secondary }),
         ),
         mainContent,
-        Box(
-          {
-            flexDirection: "row",
-            width: "100%",
-            minHeight: 3,
-            backgroundColor: opencodeTheme.backgroundElement,
-            borderStyle: "single",
-            borderColor: opencodeTheme.borderSubtle,
-            paddingLeft: 1,
-            paddingRight: 1,
-            gap: 1,
-          },
-          Text({ content: inputBar.prompt, fg: inputBar.promptColor, attributes: TextAttributes.BOLD }),
-          Text({ content: inputBar.value ?? "", fg: inputBar.valueColor ?? opencodeTheme.text }),
-        ),
+        inputStack,
         Box(
           {
             flexDirection: "row",
@@ -348,6 +369,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
           Text({ content: cwdPath, fg: opencodeTheme.textMuted }),
           Text({ content: pendingExit ? "press Ctrl+C again to exit" : "/ commands · Ctrl+P palette · Ctrl+C exit", fg: pendingExit ? opencodeTheme.warning : opencodeTheme.textMuted }),
         ),
+        paletteElement,
       ),
     )
   }
