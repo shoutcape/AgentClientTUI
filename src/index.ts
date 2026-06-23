@@ -3,6 +3,7 @@ import { cwd, execPath } from "node:process"
 import { AcpClient } from "./acp/client"
 import { JsonRpcTransport } from "./acp/transport"
 import type { AgentCommand, TransportEvent } from "./acp/types"
+import { CommandRegistry } from "./commands/registry"
 import { createAgentClientUi } from "./ui"
 
 function parseArgs(argv: string[]): { agent: AgentCommand; headless: boolean } {
@@ -42,18 +43,67 @@ function commandFromShellText(commandText: string): AgentCommand {
   return { command, args, label: commandText }
 }
 
-function describeNotification(event: Extract<TransportEvent, { type: "notification" }>): string {
-  return `${event.method}: ${JSON.stringify(event.params ?? {})}`
-}
-
 const { agent, headless } = parseArgs(process.argv.slice(2))
-const ui = await createAgentClientUi({ headless })
+const registry = new CommandRegistry()
 const transport = new JsonRpcTransport(agent)
 const client = new AcpClient(transport)
 
+const ui = await createAgentClientUi({
+  headless,
+  registry,
+  onFetchOptions: async (method) => {
+    const options = await client.fetchOptions(method)
+    return options.map((o) => o.label)
+  },
+})
+
+let isStreaming = false
+let streamingText = ""
+let activePanelCommand: string | null = null
+let panelText = ""
+
+function extractAgentText(params: unknown): string | null {
+  if (!params || typeof params !== "object") return null
+  const p = params as Record<string, unknown>
+  if (typeof p.text === "string") return p.text
+  if (typeof p.content === "string") return p.content
+  if (typeof p.delta === "string") return p.delta
+  return null
+}
+
 transport.onEvent((event) => {
   if (event.type === "notification") {
-    ui.append({ kind: "agent", text: describeNotification(event) })
+    if (event.method === "_kiro.dev/commands/available") {
+      const params = event.params as { commands?: Array<{ name: string; description: string; meta?: Record<string, unknown> }> } | undefined
+      const descriptors = (params?.commands ?? []).map((cmd) => ({
+        name: cmd.name,
+        description: cmd.description,
+        source: "acp" as const,
+        ...(cmd.meta?.inputType ? { inputType: cmd.meta.inputType as "selection" | "panel" } : {}),
+        ...(cmd.meta?.subcommands ? { subcommands: cmd.meta.subcommands as string[] } : {}),
+        ...(cmd.meta?.subcommandHints ? { subcommandHints: cmd.meta.subcommandHints as Record<string, string> } : {}),
+        ...(cmd.meta?.optionsMethod ? { optionsMethod: cmd.meta.optionsMethod as string } : {}),
+        ...(cmd.meta?.hint ? { hint: cmd.meta.hint as string } : {}),
+        ...(cmd.meta?.hidden ? { hidden: cmd.meta.hidden as boolean } : {}),
+      }))
+      registry.setAcpCommands(descriptors)
+      return
+    }
+
+    const text = extractAgentText(event.params)
+    if (text !== null) {
+      if (activePanelCommand) {
+        panelText += text
+        ui.updatePanel(panelText)
+      } else if (!isStreaming) {
+        isStreaming = true
+        streamingText = text
+        ui.append({ kind: "agent", text: streamingText })
+      } else {
+        streamingText += text
+        ui.updateLast(streamingText)
+      }
+    }
   } else if (event.type === "stderr") {
     ui.append({ kind: "log", text: event.text.trim() })
   } else if (event.type === "protocol-error") {
@@ -78,34 +128,44 @@ try {
   ui.setStatus(`session ${sessionId}`)
 
   let promptInFlight = false
-  async function sendPrompt(prompt: string): Promise<void> {
+
+  async function sendPrompt(prompt: string, options?: { panel?: boolean }): Promise<void> {
     if (promptInFlight) {
       ui.append({ kind: "status", text: "prompt already running" })
       return
     }
 
     promptInFlight = true
-    ui.append({ kind: "user", text: prompt })
+    streamingText = ""
+    isStreaming = false
+
+    if (options?.panel) {
+      activePanelCommand = prompt
+      panelText = ""
+      ui.showPanel(prompt)
+    } else {
+      ui.append({ kind: "user", text: prompt })
+    }
+
     ui.setStatus("prompting")
 
     try {
-      const response = await client.prompt(sessionId, prompt)
-      ui.append({ kind: "status", text: `prompt response: ${JSON.stringify(response)}` })
-      ui.setStatus("complete")
+      await client.prompt(sessionId, prompt)
+      ui.setStatus("ready")
     } catch (error) {
       ui.append({ kind: "error", text: (error as Error).message })
       ui.setStatus("failed")
     } finally {
       promptInFlight = false
+      isStreaming = false
+      activePanelCommand = null
     }
   }
 
   ui.onSubmit(sendPrompt)
 
-  const prompt = "Say hello from AgentClientTUI."
-  await sendPrompt(prompt)
-
-  if (headless || !ui.isInteractive) {
+  if (headless) {
+    await sendPrompt("Say hello from AgentClientTUI.")
     transport.destroy()
     ui.destroy()
   }
