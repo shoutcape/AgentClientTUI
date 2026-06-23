@@ -54,6 +54,22 @@ export type AgentClientUi = {
   destroy(): void
 }
 
+type TerminalFocusRenderer = {
+  stdout?: Pick<NodeJS.WriteStream, "write">
+}
+
+function enableTerminalFocusReporting(renderer: TerminalFocusRenderer): () => void {
+  const stdout = renderer.stdout ?? process.stdout
+  stdout.write("\x1b[?1004h")
+
+  let disabled = false
+  return () => {
+    if (disabled) return
+    disabled = true
+    stdout.write("\x1b[?1004l")
+  }
+}
+
 export async function createAgentClientUi(options: UiOptions = {}): Promise<AgentClientUi> {
   if (options.headless) {
     return createTextUi()
@@ -71,6 +87,8 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       return createTextUi()
     }
   }
+
+  const disableTerminalFocusReporting = enableTerminalFocusReporting(renderer as unknown as TerminalFocusRenderer)
 
   let status = "starting"
   let inputValue = ""
@@ -621,6 +639,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     },
     destroy() {
       clearInterval(blinkTimer)
+      disableTerminalFocusReporting()
       renderer.destroy()
     },
   }

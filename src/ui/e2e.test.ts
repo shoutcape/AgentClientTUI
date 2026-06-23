@@ -1,7 +1,36 @@
 import { describe, expect, test } from "bun:test"
+import { Readable, Writable } from "node:stream"
+import { createCliRenderer } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { CommandRegistry } from "../commands/registry"
 import { createAgentClientUi } from "../ui"
+
+class CapturingStdout extends Writable {
+  isTTY = true
+  columns = 100
+  rows = 30
+  chunks: string[] = []
+
+  _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
+    this.chunks.push(Buffer.from(chunk).toString("binary"))
+    callback()
+  }
+
+  getColorDepth() {
+    return 24
+  }
+
+  output() {
+    return this.chunks.join("")
+  }
+}
+
+function createCapturingStdin() {
+  const stdin = new Readable({ read() {} }) as Readable & { isTTY: boolean; setRawMode: () => typeof stdin }
+  stdin.isTTY = true
+  stdin.setRawMode = () => stdin
+  return stdin
+}
 
 function createMockCommandRegistry(): CommandRegistry {
   const registry = new CommandRegistry()
@@ -54,6 +83,56 @@ describe("OpenTUI command e2e", () => {
 
       expect(inputIndex).toBeGreaterThan(contentBottomIndex)
       expect(lines[inputIndex]).not.toContain("└")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("enables terminal focus reporting and disables it on destroy", async () => {
+    const stdout = new CapturingStdout()
+    const renderer = await createCliRenderer({
+      stdin: createCapturingStdin() as unknown as NodeJS.ReadStream,
+      stdout: stdout as unknown as NodeJS.WriteStream,
+      width: 100,
+      height: 30,
+      exitOnCtrlC: false,
+    })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer,
+    })
+
+    expect(stdout.output()).toContain("\x1B[?1004h")
+
+    ui.destroy()
+
+    expect(stdout.output()).toContain("\x1B[?1004l")
+  })
+
+  test("hides input cursor while terminal window is blurred", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("hello")
+      await testRenderer.flush()
+
+      expect(testRenderer.captureCharFrame()).toContain("hello█")
+
+      testRenderer.renderer.stdin.emit("data", Buffer.from("\x1B[O"))
+      await testRenderer.flush()
+
+      const blurredFrame = testRenderer.captureCharFrame()
+      expect(blurredFrame).toContain("hello")
+      expect(blurredFrame).not.toContain("hello█")
+
+      testRenderer.renderer.stdin.emit("data", Buffer.from("\x1B[I"))
+      await testRenderer.flush()
+
+      expect(testRenderer.captureCharFrame()).toContain("hello█")
     } finally {
       ui.destroy()
     }
