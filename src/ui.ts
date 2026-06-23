@@ -22,7 +22,6 @@ import {
   appendTranscriptEntry,
   createTranscriptState,
   finishAgentMessage as finishTranscriptAgentMessage,
-  getTranscriptLabel,
   routeTranscriptScrollAction,
   updateActiveAgentMessage,
   type TranscriptNode,
@@ -139,41 +138,39 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   }
 
   function buildTranscriptMessage(node: TranscriptNode): Renderable {
-    const { label, color } = getTranscriptLabel(node.kind)
-    const row = new BoxRenderable(renderer, {
+    const rows = buildTranscriptRows([node])
+    const nodeBox = new BoxRenderable(renderer, {
       id: `transcript-${node.id}`,
-      flexDirection: "row",
-      width: "100%",
-      gap: 1,
-    })
-    row.add(new TextRenderable(renderer, {
-      id: `transcript-${node.id}-label`,
-      content: label.padEnd(12),
-      fg: color,
-      width: 13,
-      wrapMode: "none",
-      selectable: false,
-    }))
-
-    const body = new BoxRenderable(renderer, {
-      id: `transcript-${node.id}-body`,
       flexDirection: "column",
-      flexGrow: 1,
       width: "100%",
     })
 
-    for (const block of node.blocks) {
-      body.add(new TextRenderable(renderer, {
-        id: `transcript-${node.id}-${block.id}`,
-        content: block.text,
-        fg: opencodeTheme.text,
+    rows.forEach((transcriptRow, index) => {
+      const row = new BoxRenderable(renderer, {
+        id: `transcript-${node.id}-row-${index}`,
+        flexDirection: "row",
         width: "100%",
-        wrapMode: "word",
+        gap: 1,
+      })
+      row.add(new TextRenderable(renderer, {
+        id: `transcript-${node.id}-row-${index}-label`,
+        content: transcriptRow.label.padEnd(12),
+        fg: transcriptRow.color,
+        width: 13,
+        wrapMode: "none",
+        selectable: false,
       }))
-    }
+      row.add(new TextRenderable(renderer, {
+        id: `transcript-${node.id}-row-${index}-body`,
+        content: transcriptRow.text,
+        fg: transcriptRow.color,
+        width: "100%",
+        wrapMode: transcriptRow.wrapMode ?? "word",
+      }))
+      nodeBox.add(row)
+    })
 
-    row.add(body)
-    return row
+    return nodeBox
   }
 
   function syncTranscript(): void {

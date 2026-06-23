@@ -25,7 +25,7 @@ function createMockCommandRegistry(): CommandRegistry {
       name: "/output",
       description: "Emit mock ACP output variants",
       source: "acp",
-      subcommands: ["text", "thought", "plan", "tools", "usage", "mixed"],
+      subcommands: ["text", "thought", "plan", "tools", "usage", "code", "diff", "mixed"],
     },
     ...Array.from({ length: 16 }, (_, i) => {
       const n = i + 1
@@ -70,6 +70,10 @@ describe("OpenTUI command e2e", () => {
       ui.append({ kind: "plan", text: "[completed] Inspect workspace" })
       ui.append({ kind: "thought", text: "Thinking through mock output types." })
       ui.append({ kind: "tool", text: "read completed: Found package metadata." })
+      ui.append({ kind: "tool", blocks: [
+        { id: "code-1", type: "code", language: "ts", text: "const answer = 42" },
+        { id: "diff-1", type: "diff", path: "src/example.ts", oldText: "const before = 1", newText: "const after = 2" },
+      ] })
       ui.append({ kind: "usage", text: "usage 53000/200000 tokens, 0.045 USD" })
       await testRenderer.flush()
 
@@ -78,6 +82,10 @@ describe("OpenTUI command e2e", () => {
       expect(frame).toContain("[completed] Inspect workspace")
       expect(frame).toContain("◇ thought")
       expect(frame).toContain("◦ tool")
+      expect(frame).toContain("code ts")
+      expect(frame).toContain("diff src/example.ts")
+      expect(frame).toContain("- const before = 1")
+      expect(frame).toContain("+ const after = 2")
       expect(frame).toContain("↯ usage")
     } finally {
       ui.destroy()

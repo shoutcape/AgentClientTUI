@@ -72,6 +72,20 @@ describe("transcript model", () => {
     ])
   })
 
+  test("buildTranscriptRows renders code and diff blocks with line colors", () => {
+    expect(buildTranscriptRows([{ kind: "tool", blocks: [
+      { id: "block-1", type: "code", language: "ts", text: "const before = 1\nconst after = 2" },
+      { id: "block-2", type: "diff", path: "src/example.ts", oldText: "const before = 1", newText: "const after = 2" },
+    ] }])).toEqual([
+      { label: "◦ tool", text: "code ts", color: opencodeTranscriptTheme.info, wrapMode: "none" },
+      { label: "", text: "  const before = 1", color: opencodeTranscriptTheme.text, wrapMode: "none" },
+      { label: "", text: "  const after = 2", color: opencodeTranscriptTheme.text, wrapMode: "none" },
+      { label: "◦ tool", text: "diff src/example.ts", color: opencodeTranscriptTheme.info, wrapMode: "none" },
+      { label: "", text: "- const before = 1", color: opencodeTranscriptTheme.error, wrapMode: "none" },
+      { label: "", text: "+ const after = 2", color: opencodeTranscriptTheme.success, wrapMode: "none" },
+    ])
+  })
+
   test("maps always-active transcript scroll keys", () => {
     expect(getTranscriptScrollAction("pageup")).toBe("page-up")
     expect(getTranscriptScrollAction("pagedown")).toBe("page-down")

@@ -55,7 +55,7 @@ function announceCommands(): void {
         {
           name: "/output",
           description: "Emit mock ACP output variants",
-          meta: { subcommands: ["text", "thought", "plan", "tools", "usage", "mixed"] },
+          meta: { subcommands: ["text", "thought", "plan", "tools", "usage", "code", "diff", "mixed"] },
         },
         ...highCountCommands,
       ],
@@ -149,6 +149,28 @@ function streamUsage(): void {
   })
 }
 
+function streamCode(): void {
+  sessionUpdate({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "mock-code-1",
+    status: "completed",
+    content: [
+      { type: "content", content: { type: "code", language: "ts", text: "const answer = 42\nconsole.log(answer)" } },
+    ],
+  })
+}
+
+function streamDiff(): void {
+  sessionUpdate({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "mock-diff-1",
+    status: "completed",
+    content: [
+      { type: "diff", path: "src/example.ts", oldText: "const before = 1", newText: "const after = 2" },
+    ],
+  })
+}
+
 function longLineCount(prompt: string): number {
   const raw = Number.parseInt(prompt.split(/\s+/)[1] ?? "20", 10)
   if (!Number.isFinite(raw)) return 20
@@ -230,10 +252,14 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       else if (variant === "plan") streamPlan()
       else if (variant === "tools") streamToolLifecycle()
       else if (variant === "usage") streamUsage()
+      else if (variant === "code") streamCode()
+      else if (variant === "diff") streamDiff()
       else {
         streamPlan()
         streamThought("Thinking through mock output types.")
         streamToolLifecycle()
+        streamCode()
+        streamDiff()
         streamUsage()
         streamStandardText("Mock mixed output complete.")
       }

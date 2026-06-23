@@ -95,7 +95,7 @@ transport.onEvent((event) => {
         ui.updateLast(streamingText)
       }
     } else if (update) {
-      ui.append({ kind: update.type, text: update.text })
+      ui.append({ kind: update.type, text: update.text, ...("blocks" in update ? { blocks: update.blocks } : {}) })
     }
   } else if (event.type === "stderr") {
     ui.append({ kind: "log", text: event.text.trim() })

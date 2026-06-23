@@ -3,10 +3,15 @@ import type { JsonValue } from "./types"
 export type NormalizedSessionUpdate =
   | { type: "agent-text"; text: string; messageId?: string }
   | { type: "thought"; text: string; messageId?: string }
-  | { type: "tool"; text: string; toolCallId?: string }
+  | { type: "tool"; text: string; toolCallId?: string; blocks?: NormalizedBlock[] }
   | { type: "plan"; text: string }
   | { type: "usage"; text: string }
   | { type: "status"; text: string }
+
+export type NormalizedBlock =
+  | { type: "text"; text: string }
+  | { type: "code"; text: string; language?: string }
+  | { type: "diff"; path?: string; oldText?: string; newText?: string; patch?: string }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
@@ -16,20 +21,49 @@ function textFromContent(content: unknown): string | null {
   const c = asRecord(content)
   if (!c) return null
   if (c.type === "text" && typeof c.text === "string") return c.text
+  if (c.type === "code" && typeof c.text === "string") return c.text
   return null
 }
 
-function formatToolContent(content: unknown): string[] {
+function blockFromContent(content: unknown): NormalizedBlock | null {
+  const c = asRecord(content)
+  if (!c) return null
+  if (c.type === "text" && typeof c.text === "string") return { type: "text", text: c.text }
+  if (c.type === "code" && typeof c.text === "string") {
+    return {
+      type: "code",
+      text: c.text,
+      ...(typeof c.language === "string" ? { language: c.language } : {}),
+    }
+  }
+  return null
+}
+
+function textFromBlock(block: NormalizedBlock): string {
+  if (block.type === "text") return block.text
+  if (block.type === "code") return `${block.language ? `code ${block.language}` : "code"}\n${block.text}`
+  return block.path ? `diff ${block.path}` : "diff"
+}
+
+function formatToolContent(content: unknown): NormalizedBlock[] {
   if (!Array.isArray(content)) return []
   return content.flatMap((item) => {
     const record = asRecord(item)
     if (!record) return []
     if (record.type === "content") {
-      const text = textFromContent(record.content)
-      return text ? [text] : []
+      const block = blockFromContent(record.content)
+      return block ? [block] : []
     }
-    if (record.type === "diff" && typeof record.path === "string") return [`diff ${record.path}`]
-    if (record.type === "terminal" && typeof record.terminalId === "string") return [`terminal ${record.terminalId}`]
+    if (record.type === "diff") {
+      return [{
+        type: "diff" as const,
+        ...(typeof record.path === "string" ? { path: record.path } : {}),
+        ...(typeof record.oldText === "string" ? { oldText: record.oldText } : {}),
+        ...(typeof record.newText === "string" ? { newText: record.newText } : {}),
+        ...(typeof record.patch === "string" ? { patch: record.patch } : {}),
+      }]
+    }
+    if (record.type === "terminal" && typeof record.terminalId === "string") return [{ type: "text", text: `terminal ${record.terminalId}` }]
     return []
   })
 }
@@ -89,10 +123,18 @@ export function normalizeSessionUpdate(method: string, params: JsonValue | undef
 
   if (updateType === "tool_call_update") {
     const status = typeof update.status === "string" ? update.status : "updated"
-    const lines = formatToolContent(update.content)
+    const contentBlocks = formatToolContent(update.content)
+    const statusBlock = contentBlocks.length ? { type: "text" as const, text: `${status}:` } : null
+    const blocks = contentBlocks.length
+      ? [
+          ...(contentBlocks[0]?.type === "text" ? [{ type: "text" as const, text: `${status}: ${contentBlocks[0].text}` }, ...contentBlocks.slice(1)] : [statusBlock, ...contentBlocks]),
+        ].filter((block): block is NormalizedBlock => block !== null)
+      : []
+    const lines = blocks.map(textFromBlock)
     return {
       type: "tool",
-      text: lines.length ? `${status}: ${lines.join("\n")}` : status,
+      text: lines.length ? lines.join("\n") : status,
+      ...(blocks.length ? { blocks } : {}),
       ...(typeof update.toolCallId === "string" ? { toolCallId: update.toolCallId } : {}),
     }
   }

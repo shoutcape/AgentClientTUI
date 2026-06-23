@@ -54,7 +54,36 @@ describe("normalizeSessionUpdate", () => {
           { type: "diff", path: "/tmp/a.ts", oldText: "old", newText: "new" },
         ],
       },
-    })).toEqual({ type: "tool", text: "completed: Found script test\ndiff /tmp/a.ts", toolCallId: "tool-1" })
+    })).toEqual({
+      type: "tool",
+      text: "completed: Found script test\ndiff /tmp/a.ts",
+      toolCallId: "tool-1",
+      blocks: [
+        { type: "text", text: "completed: Found script test" },
+        { type: "diff", path: "/tmp/a.ts", oldText: "old", newText: "new" },
+      ],
+    })
+  })
+
+  test("formats code content blocks", () => {
+    expect(normalizeSessionUpdate("session/update", {
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "tool-2",
+        status: "completed",
+        content: [
+          { type: "content", content: { type: "code", language: "ts", text: "const answer = 42" } },
+        ],
+      },
+    })).toEqual({
+      type: "tool",
+      text: "completed:\ncode ts\nconst answer = 42",
+      toolCallId: "tool-2",
+      blocks: [
+        { type: "text", text: "completed:" },
+        { type: "code", language: "ts", text: "const answer = 42" },
+      ],
+    })
   })
 
   test("formats usage updates", () => {

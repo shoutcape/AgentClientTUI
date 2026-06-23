@@ -2,12 +2,15 @@ export type TranscriptKind = "user" | "agent" | "thought" | "tool" | "plan" | "u
 
 export type TranscriptEntry = {
   kind: TranscriptKind
-  text: string
+  text?: string
+  blocks?: TranscriptBlock[]
 }
 
 export type TranscriptBlock =
-  | { id: string; type: "text"; text: string }
-  | { id: string; type: "status"; text: string }
+  | { id?: string; type: "text"; text: string }
+  | { id?: string; type: "status"; text: string }
+  | { id?: string; type: "code"; text: string; language?: string }
+  | { id?: string; type: "diff"; text?: undefined; path?: string; oldText?: string; newText?: string; patch?: string }
 
 export type TranscriptNode = {
   id: string
@@ -26,6 +29,7 @@ export type TranscriptRow = {
   label: string
   text: string
   color: string
+  wrapMode?: "word" | "none"
 }
 
 export type TranscriptScrollAction = "page-up" | "page-down" | "top" | "bottom"
@@ -59,18 +63,20 @@ export function createTranscriptState(): TranscriptState {
 
 export function appendTranscriptEntry(state: TranscriptState, entry: TranscriptEntry): TranscriptState {
   const nodeId = `node-${state.nextNodeId}`
-  const blockId = `block-${state.nextBlockId}`
+  const blocks = entry.blocks?.length
+    ? entry.blocks.map((block, index) => ({ ...block, id: block.id || `block-${state.nextBlockId + index}` }))
+    : [{ id: `block-${state.nextBlockId}`, type: "text" as const, text: entry.text ?? "" }]
   const node: TranscriptNode = {
     id: nodeId,
     kind: entry.kind,
-    blocks: [{ id: blockId, type: "text", text: entry.text }],
+    blocks,
   }
 
   const nextState: TranscriptState = {
     ...state,
     nodes: [...state.nodes, node],
     nextNodeId: state.nextNodeId + 1,
-    nextBlockId: state.nextBlockId + 1,
+    nextBlockId: state.nextBlockId + blocks.length,
   }
   return entry.kind === "agent" ? { ...nextState, activeAgentNodeId: nodeId } : nextState
 }
@@ -125,8 +131,42 @@ function isTranscriptNode(item: TranscriptNode | TranscriptEntry): item is Trans
 export function buildTranscriptRows(items: Array<TranscriptNode | TranscriptEntry>): TranscriptRow[] {
   return items.flatMap((item) => {
     const { label, color } = getTranscriptLabel(item.kind)
-    if (!isTranscriptNode(item)) return [{ label, text: item.text, color }]
-    return item.blocks.map((block) => ({ label, text: block.text, color }))
+    if (!isTranscriptNode(item)) {
+      if (item.blocks?.length) return buildBlockRows(item.blocks, label, color)
+      return [{ label, text: item.text ?? "", color }]
+    }
+    return buildBlockRows(item.blocks, label, color)
+  })
+}
+
+function buildBlockRows(blocks: TranscriptBlock[], label: string, color: string): TranscriptRow[] {
+  return blocks.flatMap((block) => {
+    if (block.type === "code") {
+      const header = block.language ? `code ${block.language}` : "code"
+      return [
+        { label, text: header, color, wrapMode: "none" as const },
+        ...block.text.split("\n").map((line) => ({ label: "", text: `  ${line}`, color: opencodeTranscriptTheme.text, wrapMode: "none" as const })),
+      ]
+    }
+
+    if (block.type === "diff") {
+      const header = block.path ? `diff ${block.path}` : "diff"
+      const lines = block.patch ? block.patch.split("\n") : [
+        ...(block.oldText ? block.oldText.split("\n").map((line) => `- ${line}`) : []),
+        ...(block.newText ? block.newText.split("\n").map((line) => `+ ${line}`) : []),
+      ]
+      return [
+        { label, text: header, color, wrapMode: "none" as const },
+        ...lines.map((line) => ({
+          label: "",
+          text: line,
+          color: line.startsWith("-") ? opencodeTranscriptTheme.error : line.startsWith("+") ? opencodeTranscriptTheme.success : opencodeTranscriptTheme.textMuted,
+          wrapMode: "none" as const,
+        })),
+      ]
+    }
+
+    return [{ label, text: block.text, color }]
   })
 }
 

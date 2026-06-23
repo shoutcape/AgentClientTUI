@@ -72,7 +72,7 @@ describe("mock ACP agent commands", () => {
           expect.objectContaining({ name: "/context", meta: expect.objectContaining({ inputType: "panel" }) }),
           expect.objectContaining({ name: "/long" }),
           expect.objectContaining({ name: "/fail" }),
-          expect.objectContaining({ name: "/output", meta: expect.objectContaining({ subcommands: ["text", "thought", "plan", "tools", "usage", "mixed"] }) }),
+          expect.objectContaining({ name: "/output", meta: expect.objectContaining({ subcommands: ["text", "thought", "plan", "tools", "usage", "code", "diff", "mixed"] }) }),
           expect.objectContaining({ name: "/mock-12", description: "Mock command 12" }),
         ]),
       },
@@ -161,6 +161,14 @@ describe("mock ACP agent commands", () => {
     })
     expect(await agent.next()).toMatchObject({
       method: "session/update",
+      params: { update: { sessionUpdate: "tool_call_update", toolCallId: "mock-code-1", content: [{ type: "content", content: { type: "code" } }] } },
+    })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "tool_call_update", toolCallId: "mock-diff-1", content: [{ type: "diff", path: "src/example.ts" }] } },
+    })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
       params: { update: { sessionUpdate: "usage_update", used: 53000, size: 200000 } },
     })
     expect(await agent.next()).toMatchObject({
@@ -168,5 +176,28 @@ describe("mock ACP agent commands", () => {
       params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Mock mixed output complete." } } },
     })
     expect(await agent.next()).toMatchObject({ id: promptId, result: { stopReason: "end_turn" } })
+  })
+
+  test("emits code and diff output variants", async () => {
+    const agent = startMockAgent()
+    agent.send("initialize")
+    await agent.next()
+    agent.send("session/new")
+    await agent.next()
+    await agent.next()
+
+    const codePromptId = agent.send("session/prompt", { prompt: "/output code" })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "tool_call_update", content: [{ type: "content", content: { type: "code", language: "ts", text: expect.stringContaining("const answer") } }] } },
+    })
+    expect(await agent.next()).toMatchObject({ id: codePromptId, result: { stopReason: "end_turn" } })
+
+    const diffPromptId = agent.send("session/prompt", { prompt: "/output diff" })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "tool_call_update", content: [{ type: "diff", path: "src/example.ts", oldText: expect.stringContaining("before"), newText: expect.stringContaining("after") }] } },
+    })
+    expect(await agent.next()).toMatchObject({ id: diffPromptId, result: { stopReason: "end_turn" } })
   })
 })
