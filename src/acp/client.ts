@@ -46,4 +46,17 @@ export class AcpClient {
       content: [{ type: "text", text }],
     }), "session/prompt")
   }
+
+  async fetchOptions(method: string): Promise<Array<{ label: string; value: string; description?: string }>> {
+    const result = await this.transport.request(method, {})
+    if (Array.isArray(result)) {
+      return (result as string[]).map((v) => ({ label: String(v), value: String(v) }))
+    }
+    const obj = result as { options?: Array<{ label?: string; value?: string; name?: string; description?: string }> }
+    return (obj.options ?? []).map((o) => ({
+      label: o.label ?? o.name ?? o.value ?? "",
+      value: o.value ?? o.name ?? o.label ?? "",
+      ...(o.description != null ? { description: o.description } : {}),
+    }))
+  }
 }
