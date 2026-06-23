@@ -45,6 +45,8 @@ function commandFromShellText(commandText: string): AgentCommand {
 
 const { agent, headless } = parseArgs(process.argv.slice(2))
 const registry = new CommandRegistry()
+registry.addLocalCommand({ name: "Quit", description: "Exit AgentClientTUI", source: "local" })
+registry.addLocalCommand({ name: "Toggle Session Panel", description: "Show/hide sidebar", source: "local" })
 const transport = new JsonRpcTransport(agent)
 const client = new AcpClient(transport)
 
@@ -130,6 +132,17 @@ try {
   let promptInFlight = false
 
   async function sendPrompt(prompt: string, options?: { panel?: boolean }): Promise<void> {
+    // Handle local commands
+    if (prompt === "Quit") {
+      transport.destroy()
+      ui.destroy()
+      process.exit(0)
+    }
+    if (prompt === "Toggle Session Panel") {
+      ui.append({ kind: "status", text: "Toggle sidebar (not yet implemented)" })
+      return
+    }
+
     if (promptInFlight) {
       ui.append({ kind: "status", text: "prompt already running" })
       return
