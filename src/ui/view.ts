@@ -28,6 +28,7 @@ export type InputKey = {
 export type InputKeyResult = {
   value: string
   submit?: string
+  activate?: "slash"
 }
 
 export type InputBarOptions = {
@@ -95,6 +96,10 @@ export function handleInputKey(value: string, key: InputKey): InputKeyResult {
 
   if (key.name === "space") {
     return { value: `${value} ` }
+  }
+
+  if (key.sequence === "/" && value === "") {
+    return { value: "/", activate: "slash" }
   }
 
   if (key.sequence.length === 1 && key.sequence >= " ") {
