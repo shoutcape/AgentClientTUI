@@ -4,7 +4,8 @@ import { opencodeTheme } from "./view"
 
 export function buildDropdown(state: Extract<CommandState, { phase: "listing" | "drilldown" }>, items: Array<{ name: string; description: string }>) {
   const maxVisible = 8
-  const visibleItems = items.slice(0, maxVisible)
+  const scrollStart = Math.max(0, Math.min(state.selectedIndex - maxVisible + 1, items.length - maxVisible))
+  const visibleItems = items.slice(scrollStart, scrollStart + maxVisible)
   const isLoading = state.phase === "drilldown" && state.loading
 
   const children = []
@@ -27,7 +28,7 @@ export function buildDropdown(state: Extract<CommandState, { phase: "listing" | 
     )
   } else {
     visibleItems.forEach((item, i) => {
-      const selected = i === state.selectedIndex
+      const selected = (i + scrollStart) === state.selectedIndex
       const boxOpts: Record<string, unknown> = {
         flexDirection: "row",
         width: "100%",

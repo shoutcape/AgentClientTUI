@@ -254,12 +254,21 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         const result = transition(commandState, event)
         commandState = result.state
 
+        // Clamp selectedIndex to item bounds
+        if (commandState.phase === "listing" || commandState.phase === "drilldown") {
+          const itemCount = getCommandItems().length
+          if (commandState.selectedIndex >= itemCount) {
+            commandState = { ...commandState, selectedIndex: Math.max(0, itemCount - 1) }
+          }
+        }
+
         if (result.effect?.type === "execute") {
           const cmdText = result.effect.command
           const cmdName = cmdText.split(" ")[0]
           const descriptor = cmdName ? registry.get(cmdName) : undefined
           const isPanel = descriptor?.inputType === "panel"
           if (submitHandler) void submitHandler(cmdText, { panel: isPanel })
+          inputValue = ""
         } else if (result.effect?.type === "fetch-options" && fetchOptions) {
           const method = result.effect.method
           void (async () => {
@@ -270,6 +279,15 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
               render()
             }
           })()
+        }
+
+        // Sync inputValue with command query
+        if (commandState.phase === "listing" && commandState.surface === "dropdown") {
+          inputValue = `/${commandState.query}`
+        } else if (commandState.phase === "drilldown" && commandState.surface === "dropdown") {
+          inputValue = `${commandState.parent.name} ${commandState.query}`
+        } else if (commandState.phase === "idle") {
+          inputValue = ""
         }
 
         if (commandState.phase === "argument") {

@@ -43,7 +43,7 @@ export class AcpClient {
   async prompt(sessionId: string, text: string): Promise<JsonObject> {
     return asObject(await this.transport.request("session/prompt", {
       sessionId,
-      content: [{ type: "text", text }],
+      prompt: [{ type: "text", text }],
     }), "session/prompt")
   }
 
