@@ -1,6 +1,8 @@
 import {
   Box,
   BoxRenderable,
+  CodeRenderable,
+  DiffRenderable,
   ScrollBoxRenderable,
   Text,
   TextAttributes,
@@ -15,8 +17,10 @@ import {
 import { CommandRegistry } from "./commands/registry"
 import { transition, idle, type CommandItem, type CommandOption, type CommandState, type CommandEvent } from "./commands/state"
 import { buildDropdown } from "./ui/dropdown"
+import { filetype } from "./ui/filetype"
 import { buildPalette } from "./ui/palette"
 import { buildPanelOverlay } from "./ui/panel-overlay"
+import { getSyntaxStyle } from "./ui/syntax"
 import { buildInputBar, buildTranscriptRows, handleInputKey, opencodeTheme, type TranscriptEntry } from "./ui/view"
 import {
   appendTranscriptEntry,
@@ -24,6 +28,9 @@ import {
   finishAgentMessage as finishTranscriptAgentMessage,
   routeTranscriptScrollAction,
   updateActiveAgentMessage,
+  getTranscriptLabel,
+  opencodeTranscriptTheme,
+  type TranscriptBlock,
   type TranscriptNode,
 } from "./ui/transcript"
 
@@ -137,38 +144,113 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     return null
   }
 
+  function buildTranscriptLabel(node: TranscriptNode, index: number, label: string, color: string, text: string, wrapMode: "word" | "none" = "word"): Renderable {
+    const row = new BoxRenderable(renderer, {
+      id: `transcript-${node.id}-row-${index}`,
+      flexDirection: "row",
+      width: "100%",
+      gap: 1,
+    })
+    row.add(new TextRenderable(renderer, {
+      id: `transcript-${node.id}-row-${index}-label`,
+      content: label.padEnd(12),
+      fg: color,
+      width: 13,
+      wrapMode: "none",
+      selectable: false,
+    }))
+    row.add(new TextRenderable(renderer, {
+      id: `transcript-${node.id}-row-${index}-body`,
+      content: text,
+      fg: color,
+      width: "100%",
+      wrapMode,
+    }))
+    return row
+  }
+
+  function buildUnifiedDiff(block: Extract<TranscriptBlock, { type: "diff" }>): string {
+    if (block.patch) return block.patch
+    const oldLines = (block.oldText ?? "").split("\n")
+    const newLines = (block.newText ?? "").split("\n")
+    const path = block.path ?? "diff"
+    return [
+      `--- a/${path}`,
+      `+++ b/${path}`,
+      `@@ -1,${Math.max(oldLines.length, 1)} +1,${Math.max(newLines.length, 1)} @@`,
+      ...oldLines.map((line) => `-${line}`),
+      ...newLines.map((line) => `+${line}`),
+    ].join("\n")
+  }
+
+  function buildTranscriptBlock(node: TranscriptNode, block: TranscriptBlock, blockIndex: number, label: string, color: string): Renderable {
+    if (block.type === "code") {
+      const group = new BoxRenderable(renderer, {
+        id: `transcript-${node.id}-block-${block.id ?? blockIndex}`,
+        flexDirection: "column",
+        width: "100%",
+      })
+      group.add(buildTranscriptLabel(node, blockIndex, label, color, block.language ? `code ${block.language}` : "code", "none"))
+      group.add(new CodeRenderable(renderer, {
+        id: `transcript-${node.id}-code-${block.id ?? blockIndex}`,
+        content: block.text,
+        filetype: filetype(block.language),
+        syntaxStyle: getSyntaxStyle(),
+        fg: opencodeTranscriptTheme.text,
+        width: "100%",
+        wrapMode: "none",
+        conceal: false,
+      }))
+      return group
+    }
+
+    if (block.type === "diff") {
+      const group = new BoxRenderable(renderer, {
+        id: `transcript-${node.id}-block-${block.id ?? blockIndex}`,
+        flexDirection: "column",
+        width: "100%",
+      })
+      group.add(buildTranscriptLabel(node, blockIndex, label, color, block.path ? `diff ${block.path}` : "diff", "none"))
+      group.add(new DiffRenderable(renderer, {
+        id: `transcript-${node.id}-diff-${block.id ?? blockIndex}`,
+        diff: buildUnifiedDiff(block),
+        filetype: filetype(block.path),
+        syntaxStyle: getSyntaxStyle(),
+        view: "unified",
+        showLineNumbers: true,
+        width: "100%",
+        wrapMode: "none",
+        fg: opencodeTranscriptTheme.text,
+        addedBg: "#14331c",
+        removedBg: "#3a1518",
+        contextBg: opencodeTranscriptTheme.backgroundPanel,
+        addedSignColor: opencodeTranscriptTheme.success,
+        removedSignColor: opencodeTranscriptTheme.error,
+        lineNumberFg: opencodeTranscriptTheme.textMuted,
+        lineNumberBg: opencodeTranscriptTheme.backgroundPanel,
+        addedLineNumberBg: "#14331c",
+        removedLineNumberBg: "#3a1518",
+      }))
+      return group
+    }
+
+    return buildTranscriptLabel(node, blockIndex, label, color, block.text)
+  }
+
   function buildTranscriptMessage(node: TranscriptNode): Renderable {
-    const rows = buildTranscriptRows([node])
+    const { label, color } = getTranscriptLabel(node.kind)
     const nodeBox = new BoxRenderable(renderer, {
       id: `transcript-${node.id}`,
       flexDirection: "column",
       width: "100%",
+      gap: 1,
+      marginBottom: 1,
+      ...(node.kind === "tool"
+        ? { backgroundColor: "#101010", padding: 1 }
+        : {}),
     })
 
-    rows.forEach((transcriptRow, index) => {
-      const row = new BoxRenderable(renderer, {
-        id: `transcript-${node.id}-row-${index}`,
-        flexDirection: "row",
-        width: "100%",
-        gap: 1,
-      })
-      row.add(new TextRenderable(renderer, {
-        id: `transcript-${node.id}-row-${index}-label`,
-        content: transcriptRow.label.padEnd(12),
-        fg: transcriptRow.color,
-        width: 13,
-        wrapMode: "none",
-        selectable: false,
-      }))
-      row.add(new TextRenderable(renderer, {
-        id: `transcript-${node.id}-row-${index}-body`,
-        content: transcriptRow.text,
-        fg: transcriptRow.color,
-        width: "100%",
-        wrapMode: transcriptRow.wrapMode ?? "word",
-      }))
-      nodeBox.add(row)
-    })
+    node.blocks.forEach((block, index) => nodeBox.add(buildTranscriptBlock(node, block, index, label, color)))
 
     return nodeBox
   }
@@ -552,9 +634,9 @@ function createTextUi(): AgentClientUi {
     },
     onSubmit() {},
     append(entry) {
-      const [row] = buildTranscriptRows([entry])
-      if (!row) return
-      process.stdout.write(`${row.label} ${row.text}\n`)
+      for (const row of buildTranscriptRows([entry])) {
+        process.stdout.write(`${row.label} ${row.text}\n`)
+      }
     },
     updateLast() {},
     finishAgentMessage() {},

@@ -76,6 +76,8 @@ describe("OpenTUI command e2e", () => {
       ] })
       ui.append({ kind: "usage", text: "usage 53000/200000 tokens, 0.045 USD" })
       await testRenderer.flush()
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      await testRenderer.flush()
 
       const frame = testRenderer.captureCharFrame()
       expect(frame).toContain("□ plan")
@@ -87,6 +89,11 @@ describe("OpenTUI command e2e", () => {
       expect(frame).toContain("- const before = 1")
       expect(frame).toContain("+ const after = 2")
       expect(frame).toContain("↯ usage")
+
+      const lines = frame.split("\n")
+      const codeHeaderIndex = lines.findIndex((line) => line.includes("code ts"))
+      const codeContentIndex = lines.findIndex((line) => line.includes("const answer = 42"))
+      expect(codeContentIndex).toBe(codeHeaderIndex + 1)
     } finally {
       ui.destroy()
     }
