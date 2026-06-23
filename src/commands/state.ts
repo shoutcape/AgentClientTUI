@@ -1,9 +1,12 @@
 import type { CommandDescriptor } from "./registry"
 
+export type CommandOption = { label: string; value: string; description?: string }
+export type CommandItem = string | CommandOption
+
 export type CommandState =
   | { phase: "idle" }
   | { phase: "listing"; query: string; surface: "dropdown" | "palette"; selectedIndex: number }
-  | { phase: "drilldown"; parent: CommandDescriptor; items: string[]; loading: boolean; query: string; selectedIndex: number; surface: "dropdown" | "palette" }
+  | { phase: "drilldown"; parent: CommandDescriptor; items: CommandItem[]; loading: boolean; query: string; selectedIndex: number; surface: "dropdown" | "palette" }
   | { phase: "argument"; commandText: string }
 
 export type CommandEvent =
@@ -15,8 +18,8 @@ export type CommandEvent =
   | { type: "arrow-up" }
   | { type: "arrow-down" }
   | { type: "select"; command: CommandDescriptor }
-  | { type: "select-item"; item: string }
-  | { type: "options-loaded"; items: string[] }
+  | { type: "select-item"; item: CommandItem }
+  | { type: "options-loaded"; items: CommandOption[] }
 
 export type CommandEffect =
   | { type: "execute"; command: string }
@@ -113,13 +116,15 @@ function transitionDrilldown(state: Extract<CommandState, { phase: "drilldown" }
     return { state: { ...state, items: event.items, loading: false } }
   }
   if (event.type === "select-item") {
-    const hint = state.parent.subcommandHints?.[event.item]
+    const itemName = typeof event.item === "string" ? event.item : event.item.label
+    const itemValue = typeof event.item === "string" ? event.item : event.item.value
+    const hint = state.parent.subcommandHints?.[itemName]
     if (hint) {
       return {
-        state: { phase: "argument", commandText: `${state.parent.name} ${event.item} ` },
+        state: { phase: "argument", commandText: `${state.parent.name} ${itemValue} ` },
       }
     }
-    return { state: idle(), effect: { type: "execute", command: `${state.parent.name} ${event.item}` } }
+    return { state: idle(), effect: { type: "execute", command: `${state.parent.name} ${itemValue}` } }
   }
   return { state }
 }

@@ -82,11 +82,27 @@ describe("Command State Machine", () => {
       phase: "drilldown", parent: model, items: [], loading: true,
       query: "", selectedIndex: 0, surface: "dropdown",
     }
-    const result = transition(drilldown, { type: "options-loaded", items: ["opus", "sonnet"] })
+    const result = transition(drilldown, { type: "options-loaded", items: [
+      { label: "opus", value: "claude-opus", description: "Largest model" },
+      { label: "sonnet", value: "claude-sonnet" },
+    ] })
     if (result.state.phase === "drilldown") {
-      expect(result.state.items).toEqual(["opus", "sonnet"])
+      expect(result.state.items).toEqual([
+        { label: "opus", value: "claude-opus", description: "Largest model" },
+        { label: "sonnet", value: "claude-sonnet" },
+      ])
       expect(result.state.loading).toBe(false)
     }
+  })
+
+  test("select option submits value instead of display label", () => {
+    const drilldown: CommandState = {
+      phase: "drilldown", parent: model, items: [{ label: "opus", value: "claude-opus" }], loading: false,
+      query: "", selectedIndex: 0, surface: "dropdown",
+    }
+    const result = transition(drilldown, { type: "select-item", item: { label: "opus", value: "claude-opus" } })
+    expect(result.state.phase).toBe("idle")
+    expect(result.effect).toEqual({ type: "execute", command: "/model claude-opus" })
   })
 
   test("backspace on empty drilldown query returns to listing", () => {

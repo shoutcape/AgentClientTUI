@@ -53,10 +53,7 @@ const client = new AcpClient(transport)
 const ui = await createAgentClientUi({
   headless,
   registry,
-  onFetchOptions: async (method) => {
-    const options = await client.fetchOptions(method)
-    return options.map((o) => o.label)
-  },
+  onFetchOptions: (method) => client.fetchOptions(method),
 })
 
 let isStreaming = false
@@ -179,6 +176,7 @@ try {
     } finally {
       promptInFlight = false
       isStreaming = false
+      ui.finishAgentMessage()
       activePanelCommand = null
     }
   }

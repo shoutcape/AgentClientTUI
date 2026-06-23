@@ -1,15 +1,38 @@
-import { Box, Text, TextAttributes, createCliRenderer, decodePasteBytes, fg, t, type KeyEvent } from "@opentui/core"
+import {
+  Box,
+  BoxRenderable,
+  ScrollBoxRenderable,
+  Text,
+  TextAttributes,
+  TextRenderable,
+  createCliRenderer,
+  decodePasteBytes,
+  fg,
+  t,
+  type KeyEvent,
+  type Renderable,
+} from "@opentui/core"
 import { CommandRegistry } from "./commands/registry"
-import { transition, idle, type CommandState, type CommandEvent } from "./commands/state"
+import { transition, idle, type CommandItem, type CommandOption, type CommandState, type CommandEvent } from "./commands/state"
 import { buildDropdown } from "./ui/dropdown"
 import { buildPalette } from "./ui/palette"
 import { buildPanelOverlay } from "./ui/panel-overlay"
 import { buildInputBar, buildTranscriptRows, handleInputKey, opencodeTheme, type TranscriptEntry } from "./ui/view"
+import {
+  appendTranscriptEntry,
+  createTranscriptState,
+  finishAgentMessage as finishTranscriptAgentMessage,
+  getTranscriptLabel,
+  routeTranscriptScrollAction,
+  updateActiveAgentMessage,
+  type TranscriptNode,
+} from "./ui/transcript"
 
 export type UiOptions = {
   headless?: boolean
   registry?: CommandRegistry
-  onFetchOptions?: (method: string) => Promise<string[]>
+  onFetchOptions?: (method: string) => Promise<CommandOption[]>
+  renderer?: Awaited<ReturnType<typeof createCliRenderer>>
 }
 
 export type AgentClientUi = {
@@ -18,6 +41,7 @@ export type AgentClientUi = {
   onSubmit(handler: (prompt: string, options?: { panel?: boolean }) => void | Promise<void>): void
   append(entry: TranscriptEntry): void
   updateLast(text: string): void
+  finishAgentMessage(): void
   showPanel(title: string): void
   updatePanel(content: string): void
   hidePanel(): void
@@ -31,11 +55,15 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
 
   let renderer: Awaited<ReturnType<typeof createCliRenderer>>
 
-  try {
-    renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 30 })
-  } catch (error) {
-    process.stderr.write(`OpenTUI unavailable, falling back to text mode: ${(error as Error).message}\n`)
-    return createTextUi()
+  if (options.renderer) {
+    renderer = options.renderer
+  } else {
+    try {
+      renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 30 })
+    } catch (error) {
+      process.stderr.write(`OpenTUI unavailable, falling back to text mode: ${(error as Error).message}\n`)
+      return createTextUi()
+    }
   }
 
   let status = "starting"
@@ -43,12 +71,23 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   let windowActive = true
   let cursorVisible = true
   let submitHandler: ((prompt: string, options?: { panel?: boolean }) => void | Promise<void>) | undefined
-  const transcript: TranscriptEntry[] = []
+  let transcript = createTranscriptState()
   let commandState: CommandState = idle()
   const registry = options.registry ?? new CommandRegistry()
   const fetchOptions = options.onFetchOptions
   let panelOverlay: { title: string; content: string } | null = null
   let pendingExit = false
+  let transcriptScroll: ScrollBoxRenderable | undefined
+  let transcriptContentVersion = 0
+  let renderedTranscriptVersion = -1
+
+  function getItemLabel(item: CommandItem): string {
+    return typeof item === "string" ? item : item.label
+  }
+
+  function getItemDescription(item: CommandItem): string {
+    return typeof item === "string" ? "" : item.description ?? ""
+  }
 
   function getCommandItems(): Array<{ name: string; description: string }> {
     if (commandState.phase === "listing") {
@@ -58,8 +97,12 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     if (commandState.phase === "drilldown") {
       const q = commandState.query.toLowerCase()
       return commandState.items
-        .filter((i) => !q || i.toLowerCase().includes(q))
-        .map((i) => ({ name: i, description: "" }))
+        .filter((i) => {
+          const label = getItemLabel(i).toLowerCase()
+          const value = typeof i === "string" ? i.toLowerCase() : i.value.toLowerCase()
+          return !q || label.includes(q) || value.includes(q)
+        })
+        .map((i) => ({ name: getItemLabel(i), description: getItemDescription(i) }))
     }
     return []
   }
@@ -79,7 +122,11 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         if (selected) return { type: "select", command: selected }
       } else if (commandState.phase === "drilldown" && !commandState.loading) {
         const q = commandState.query.toLowerCase()
-        const filtered = commandState.items.filter((item) => !q || item.toLowerCase().includes(q))
+        const filtered = commandState.items.filter((item) => {
+          const label = getItemLabel(item).toLowerCase()
+          const value = typeof item === "string" ? item.toLowerCase() : item.value.toLowerCase()
+          return !q || label.includes(q) || value.includes(q)
+        })
         const item = filtered[commandState.selectedIndex]
         if (item) return { type: "select-item", item }
       }
@@ -91,12 +138,90 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     return null
   }
 
+  function buildTranscriptMessage(node: TranscriptNode): Renderable {
+    const { label, color } = getTranscriptLabel(node.kind)
+    const row = new BoxRenderable(renderer, {
+      id: `transcript-${node.id}`,
+      flexDirection: "row",
+      width: "100%",
+      gap: 1,
+    })
+    row.add(new TextRenderable(renderer, {
+      id: `transcript-${node.id}-label`,
+      content: label.padEnd(12),
+      fg: color,
+      width: 13,
+      wrapMode: "none",
+      selectable: false,
+    }))
+
+    const body = new BoxRenderable(renderer, {
+      id: `transcript-${node.id}-body`,
+      flexDirection: "column",
+      flexGrow: 1,
+      width: "100%",
+    })
+
+    for (const block of node.blocks) {
+      body.add(new TextRenderable(renderer, {
+        id: `transcript-${node.id}-${block.id}`,
+        content: block.text,
+        fg: opencodeTheme.text,
+        width: "100%",
+        wrapMode: "word",
+      }))
+    }
+
+    row.add(body)
+    return row
+  }
+
+  function syncTranscript(): void {
+    if (!transcriptScroll) return
+    if (renderedTranscriptVersion === transcriptContentVersion) return
+
+    for (const child of [...transcriptScroll.getChildren()]) {
+      transcriptScroll.remove(child.id)
+    }
+
+    for (const node of transcript.nodes) {
+      transcriptScroll.add(buildTranscriptMessage(node))
+    }
+
+    renderedTranscriptVersion = transcriptContentVersion
+  }
+
+  function handleTranscriptScrollKey(key: KeyEvent): boolean {
+    if (!transcriptScroll) return false
+    const action = routeTranscriptScrollAction(key.name, { panelOpen: panelOverlay !== null })
+
+    if (action === "page-up") {
+      transcriptScroll.scrollBy(-1, "viewport")
+      return true
+    }
+    if (action === "page-down") {
+      transcriptScroll.scrollBy(1, "viewport")
+      return true
+    }
+    if (action === "top") {
+      transcriptScroll.scrollTo({ x: transcriptScroll.scrollLeft, y: 0 })
+      return true
+    }
+    if (action === "bottom") {
+      transcriptScroll.scrollTo({ x: transcriptScroll.scrollLeft, y: transcriptScroll.scrollHeight })
+      transcriptScroll.stickyScroll = true
+      transcriptScroll.stickyStart = "bottom"
+      return true
+    }
+
+    return false
+  }
+
   function render(): void {
     if (renderer.root.getRenderable("app-root")) {
       renderer.root.remove("app-root")
     }
 
-    const rows = buildTranscriptRows(transcript.slice(-24))
     const inputBar = buildInputBar(inputValue, { cursorVisible: windowActive && cursorVisible })
     const cwdPath = process.cwd()
 
@@ -122,6 +247,23 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         ? [buildDropdown(commandState, getCommandItems())]
         : []
 
+      if (!transcriptScroll) {
+        transcriptScroll = new ScrollBoxRenderable(renderer, {
+          id: "transcript-scroll",
+          flexGrow: 1,
+          width: "100%",
+          scrollY: true,
+          scrollX: false,
+          stickyScroll: true,
+          stickyStart: "bottom",
+          viewportCulling: true,
+          verticalScrollbarOptions: {
+            showArrows: false,
+          },
+        })
+      }
+      syncTranscript()
+
       return Box(
         { flexDirection: "row", flexGrow: 1, width: "100%", gap: 1 },
         Box(
@@ -137,29 +279,9 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
           Box(
             { flexDirection: "column", flexGrow: 1, width: "100%" },
             Text({ content: "transcript", fg: opencodeTheme.textMuted }),
-            ...rows.map((row) =>
-              Box(
-                { flexDirection: "row", gap: 1, width: "100%" },
-                Text({ content: row.label.padEnd(12), fg: row.color }),
-                Text({ content: row.text, fg: opencodeTheme.text }),
-              ),
-            ),
+            transcriptScroll,
           ),
           ...dropdownElement,
-          Box(
-            {
-              flexDirection: "row",
-              width: "100%",
-              backgroundColor: opencodeTheme.backgroundElement,
-              borderStyle: "single",
-              borderColor: opencodeTheme.borderSubtle,
-              paddingLeft: 1,
-              paddingRight: 1,
-              gap: 1,
-            },
-            Text({ content: inputBar.prompt, fg: inputBar.promptColor, attributes: TextAttributes.BOLD }),
-            Text({ content: inputBar.value ?? "", fg: inputBar.valueColor ?? opencodeTheme.text }),
-          ),
         ),
         Box(
           {
@@ -201,6 +323,21 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
           Text({ content: `● ${status}`, fg: opencodeTheme.secondary }),
         ),
         mainContent,
+        Box(
+          {
+            flexDirection: "row",
+            width: "100%",
+            minHeight: 3,
+            backgroundColor: opencodeTheme.backgroundElement,
+            borderStyle: "single",
+            borderColor: opencodeTheme.borderSubtle,
+            paddingLeft: 1,
+            paddingRight: 1,
+            gap: 1,
+          },
+          Text({ content: inputBar.prompt, fg: inputBar.promptColor, attributes: TextAttributes.BOLD }),
+          Text({ content: inputBar.value ?? "", fg: inputBar.valueColor ?? opencodeTheme.text }),
+        ),
         Box(
           {
             flexDirection: "row",
@@ -316,6 +453,12 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       return
     }
 
+    if (handleTranscriptScrollKey(key)) {
+      pendingExit = false
+      render()
+      return
+    }
+
     const result = handleInputKey(inputValue, key)
     inputValue = result.value
     cursorVisible = true
@@ -349,15 +492,17 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       submitHandler = handler
     },
     append(entry) {
-      transcript.push(entry)
+      transcript = appendTranscriptEntry(transcript, entry)
+      transcriptContentVersion += 1
       render()
     },
     updateLast(text) {
-      const last = transcript[transcript.length - 1]
-      if (last) {
-        last.text = text
-        render()
-      }
+      transcript = updateActiveAgentMessage(transcript, text)
+      transcriptContentVersion += 1
+      render()
+    },
+    finishAgentMessage() {
+      transcript = finishTranscriptAgentMessage(transcript)
     },
     showPanel(title) {
       panelOverlay = { title, content: "" }
@@ -393,6 +538,7 @@ function createTextUi(): AgentClientUi {
       process.stdout.write(`${row.label} ${row.text}\n`)
     },
     updateLast() {},
+    finishAgentMessage() {},
     showPanel() {},
     updatePanel() {},
     hidePanel() {},

@@ -13,8 +13,8 @@ export function buildDropdown(state: Extract<CommandState, { phase: "listing" | 
   if (state.phase === "drilldown") {
     children.push(
       Box(
-        { flexDirection: "row", width: "100%", paddingLeft: 1, paddingRight: 1 },
-        Text({ content: `\u27F5 ${state.parent.name} \u2014 ${state.parent.description}`, fg: opencodeTheme.textMuted }),
+        { flexDirection: "row", width: "100%", height: 1, paddingLeft: 1, paddingRight: 1 },
+        Text({ content: `\u27F5 ${state.parent.name} - ${state.parent.description}`, fg: opencodeTheme.textMuted }),
       ),
     )
   }
@@ -22,7 +22,7 @@ export function buildDropdown(state: Extract<CommandState, { phase: "listing" | 
   if (isLoading) {
     children.push(
       Box(
-        { flexDirection: "row", paddingLeft: 1, paddingRight: 1 },
+        { flexDirection: "row", height: 1, paddingLeft: 1, paddingRight: 1 },
         Text({ content: "Loading...", fg: opencodeTheme.textMuted }),
       ),
     )
@@ -32,20 +32,18 @@ export function buildDropdown(state: Extract<CommandState, { phase: "listing" | 
       const boxOpts: Record<string, unknown> = {
         flexDirection: "row",
         width: "100%",
+        height: 1,
         paddingLeft: 1,
         paddingRight: 1,
       }
       if (selected) boxOpts.backgroundColor = opencodeTheme.primary
+      const description = item.description ? ` - ${item.description}` : ""
       children.push(
         Box(
           boxOpts,
           Text({
-            content: item.name,
+            content: `${item.name}${description}`,
             fg: selected ? opencodeTheme.background : opencodeTheme.text,
-          }),
-          Text({
-            content: ` \u2014 ${item.description}`,
-            fg: selected ? opencodeTheme.background : opencodeTheme.textMuted,
           }),
         ),
       )
@@ -54,7 +52,7 @@ export function buildDropdown(state: Extract<CommandState, { phase: "listing" | 
 
   children.push(
     Box(
-      { flexDirection: "row", paddingLeft: 1, paddingRight: 1 },
+      { flexDirection: "row", height: 1, paddingLeft: 1, paddingRight: 1 },
       Text({ content: "\u2191\u2193 navigate \u00B7 Enter select \u00B7 Esc close", fg: opencodeTheme.textMuted }),
     ),
   )

@@ -1,5 +1,5 @@
 import type { AcpClient } from "../acp/client"
-import type { CommandEffect } from "./state"
+import type { CommandEffect, CommandOption } from "./state"
 
 export interface ExecuteContext {
   client: AcpClient
@@ -8,7 +8,7 @@ export interface ExecuteContext {
   localActions: Record<string, () => void>
 }
 
-export async function handleEffect(effect: CommandEffect, ctx: ExecuteContext): Promise<string[] | undefined> {
+export async function handleEffect(effect: CommandEffect, ctx: ExecuteContext): Promise<CommandOption[] | undefined> {
   if (effect.type === "execute") {
     const cmdName = effect.command.split(" ")[0]
     if (cmdName && ctx.localActions[cmdName]) {
@@ -20,8 +20,7 @@ export async function handleEffect(effect: CommandEffect, ctx: ExecuteContext): 
   }
 
   if (effect.type === "fetch-options") {
-    const options = await ctx.client.fetchOptions(effect.method)
-    return options.map((o) => o.label)
+    return ctx.client.fetchOptions(effect.method)
   }
 
   if (effect.type === "set-input") {

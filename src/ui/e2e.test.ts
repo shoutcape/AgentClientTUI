@@ -1,0 +1,190 @@
+import { describe, expect, test } from "bun:test"
+import { createTestRenderer } from "@opentui/core/testing"
+import { CommandRegistry } from "../commands/registry"
+import { createAgentClientUi } from "../ui"
+
+function createMockCommandRegistry(): CommandRegistry {
+  const registry = new CommandRegistry()
+  registry.setAcpCommands([
+    {
+      name: "/model",
+      description: "Switch mock model",
+      source: "acp",
+      inputType: "selection",
+      optionsMethod: "_mock/commands/model/options",
+    },
+    {
+      name: "/context",
+      description: "Show mock context panel",
+      source: "acp",
+      inputType: "panel",
+      subcommands: ["show", "add", "clear"],
+    },
+    { name: "/long", description: "Stream a long mock transcript response", source: "acp" },
+  ])
+  registry.addLocalCommand({ name: "Quit", description: "Exit AgentClientTUI", source: "local" })
+  return registry
+}
+
+describe("OpenTUI command e2e", () => {
+  test("renders input bar below the content panels", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("hello")
+      await testRenderer.flush()
+
+      const lines = testRenderer.captureCharFrame().split("\n")
+      const inputIndex = lines.findIndex((line) => line.includes(">") && line.includes("hello"))
+      const contentBottomIndex = lines.findIndex((line) => line.includes("└") && line.includes("┘ └"))
+
+      expect(inputIndex).toBeGreaterThan(contentBottomIndex)
+      expect(lines[inputIndex]).not.toContain("└")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("slash opens dropdown with mock ACP commands", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("/model")
+      expect(frame).toContain("Switch mock model")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("ctrl-p opens palette with local and mock ACP commands", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      testRenderer.mockInput.pressKey("p", { ctrl: true })
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("/model")
+      expect(frame).toContain("/context")
+      expect(frame).toContain("Quit")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("selects mock model option and submits full command", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const submissions: Array<{ prompt: string; panel?: boolean }> = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      onFetchOptions: async () => [
+        { label: "sonnet", value: "claude-sonnet", description: "Balanced mock model" },
+        { label: "opus", value: "claude-opus", description: "Largest mock model" },
+        { label: "haiku", value: "claude-haiku", description: "Fast mock model" },
+      ],
+    })
+    ui.onSubmit((prompt, options) => {
+      submissions.push({ prompt, ...(options?.panel !== undefined ? { panel: options.panel } : {}) })
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("sonnet")
+      expect(frame).toContain("opus")
+      expect(frame).toContain("haiku")
+      expect(frame).toContain("Largest")
+
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      expect(submissions).toEqual([{ prompt: "/model claude-sonnet", panel: false }])
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("arrow navigation scrolls through fetched command options", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const submissions: Array<{ prompt: string; panel?: boolean }> = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      onFetchOptions: async () => Array.from({ length: 10 }, (_, i) => {
+        const n = i + 1
+        return { label: `model-${n}`, value: `model-value-${n}`, description: `Mock model ${n}` }
+      }),
+    })
+    ui.onSubmit((prompt, options) => {
+      submissions.push({ prompt, ...(options?.panel !== undefined ? { panel: options.panel } : {}) })
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      for (let i = 0; i < 9; i += 1) {
+        testRenderer.mockInput.pressArrow("down")
+        await testRenderer.flush()
+      }
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("model-10")
+
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      expect(submissions).toEqual([{ prompt: "/model model-value-10", panel: false }])
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("routes mock context command as panel submission", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const submissions: Array<{ prompt: string; panel?: boolean }> = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+    ui.onSubmit((prompt, options) => {
+      submissions.push({ prompt, ...(options?.panel !== undefined ? { panel: options.panel } : {}) })
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      await testRenderer.flush()
+      await testRenderer.mockInput.typeText("con")
+      await testRenderer.flush()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      expect(submissions).toEqual([{ prompt: "/context show", panel: true }])
+    } finally {
+      ui.destroy()
+    }
+  })
+})
