@@ -1,4 +1,4 @@
-export type TranscriptKind = "user" | "agent" | "status" | "error" | "log"
+export type TranscriptKind = "user" | "agent" | "thought" | "tool" | "plan" | "usage" | "status" | "error" | "log"
 
 export type TranscriptEntry = {
   kind: TranscriptKind
@@ -101,6 +101,14 @@ export function getTranscriptLabel(kind: TranscriptKind): { label: string; color
       return { label: "● user", color: opencodeTranscriptTheme.success }
     case "agent":
       return { label: "◆ assistant", color: opencodeTranscriptTheme.primary }
+    case "thought":
+      return { label: "◇ thought", color: opencodeTranscriptTheme.textMuted }
+    case "tool":
+      return { label: "◦ tool", color: opencodeTranscriptTheme.info }
+    case "plan":
+      return { label: "□ plan", color: opencodeTranscriptTheme.secondary }
+    case "usage":
+      return { label: "↯ usage", color: opencodeTranscriptTheme.warning }
     case "status":
       return { label: "● status", color: opencodeTranscriptTheme.secondary }
     case "error":

@@ -72,6 +72,7 @@ describe("mock ACP agent commands", () => {
           expect.objectContaining({ name: "/context", meta: expect.objectContaining({ inputType: "panel" }) }),
           expect.objectContaining({ name: "/long" }),
           expect.objectContaining({ name: "/fail" }),
+          expect.objectContaining({ name: "/output", meta: expect.objectContaining({ subcommands: ["text", "thought", "plan", "tools", "usage", "mixed"] }) }),
           expect.objectContaining({ name: "/mock-12", description: "Mock command 12" }),
         ]),
       },
@@ -129,6 +130,43 @@ describe("mock ACP agent commands", () => {
       "Mock long line 4 of 5.\n",
       "Mock long line 5 of 5.\n",
     ])
+    expect(await agent.next()).toMatchObject({ id: promptId, result: { stopReason: "end_turn" } })
+  })
+
+  test("emits standard ACP output update variants", async () => {
+    const agent = startMockAgent()
+    agent.send("initialize")
+    await agent.next()
+    agent.send("session/new")
+    await agent.next()
+    await agent.next()
+
+    const promptId = agent.send("session/prompt", { prompt: "/output mixed" })
+
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "plan", entries: expect.arrayContaining([expect.objectContaining({ content: "Inspect workspace" })]) } },
+    })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Thinking through mock output types." } } },
+    })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "tool_call", toolCallId: "mock-tool-1", title: "Reading package.json" } },
+    })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "tool_call_update", toolCallId: "mock-tool-1", status: "completed" } },
+    })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "usage_update", used: 53000, size: 200000 } },
+    })
+    expect(await agent.next()).toMatchObject({
+      method: "session/update",
+      params: { update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Mock mixed output complete." } } },
+    })
     expect(await agent.next()).toMatchObject({ id: promptId, result: { stopReason: "end_turn" } })
   })
 })

@@ -15,10 +15,18 @@ describe("OpenCode-inspired UI view model", () => {
     expect(buildTranscriptRows([
       { kind: "user", text: "inspect repo" },
       { kind: "agent", text: "session/update: working" },
+      { kind: "thought", text: "checking files" },
+      { kind: "tool", text: "read completed" },
+      { kind: "plan", text: "[pending] run tests" },
+      { kind: "usage", text: "usage 10/100 tokens" },
       { kind: "log", text: "mock-agent: ready" },
     ])).toEqual([
       { label: "● user", text: "inspect repo", color: opencodeTheme.success },
       { label: "◆ assistant", text: "session/update: working", color: opencodeTheme.primary },
+      { label: "◇ thought", text: "checking files", color: opencodeTheme.textMuted },
+      { label: "◦ tool", text: "read completed", color: opencodeTheme.info },
+      { label: "□ plan", text: "[pending] run tests", color: opencodeTheme.secondary },
+      { label: "↯ usage", text: "usage 10/100 tokens", color: opencodeTheme.warning },
       { label: "· log", text: "mock-agent: ready", color: opencodeTheme.textMuted },
     ])
   })

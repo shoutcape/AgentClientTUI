@@ -52,6 +52,11 @@ function announceCommands(): void {
         },
         { name: "/long", description: "Stream a long mock transcript response", meta: {} },
         { name: "/fail", description: "Return a mock prompt error", meta: {} },
+        {
+          name: "/output",
+          description: "Emit mock ACP output variants",
+          meta: { subcommands: ["text", "thought", "plan", "tools", "usage", "mixed"] },
+        },
         ...highCountCommands,
       ],
       prompts: [],
@@ -83,6 +88,64 @@ function streamText(text: string): void {
       sessionId,
       update: { type: "agent_message_chunk", text },
     },
+  })
+}
+
+function sessionUpdate(update: unknown): void {
+  write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } })
+}
+
+function streamStandardText(text: string, messageId = "mock-agent-message"): void {
+  sessionUpdate({
+    sessionUpdate: "agent_message_chunk",
+    messageId,
+    content: { type: "text", text },
+  })
+}
+
+function streamThought(text: string): void {
+  sessionUpdate({
+    sessionUpdate: "agent_thought_chunk",
+    content: { type: "text", text },
+  })
+}
+
+function streamPlan(): void {
+  sessionUpdate({
+    sessionUpdate: "plan",
+    entries: [
+      { content: "Inspect workspace", priority: "high", status: "completed" },
+      { content: "Run tool mock", priority: "medium", status: "in_progress" },
+      { content: "Summarize output", priority: "low", status: "pending" },
+    ],
+  })
+}
+
+function streamToolLifecycle(): void {
+  sessionUpdate({
+    sessionUpdate: "tool_call",
+    toolCallId: "mock-tool-1",
+    title: "Reading package.json",
+    kind: "read",
+    status: "pending",
+  })
+  sessionUpdate({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "mock-tool-1",
+    status: "completed",
+    content: [
+      { type: "content", content: { type: "text", text: "Found package metadata." } },
+      { type: "diff", path: "/tmp/mock.patch", oldText: "before", newText: "after" },
+    ],
+  })
+}
+
+function streamUsage(): void {
+  sessionUpdate({
+    sessionUpdate: "usage_update",
+    used: 53000,
+    size: 200000,
+    cost: { amount: 0.045, currency: "USD" },
   })
 }
 
@@ -155,6 +218,24 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
       for (let i = 1; i <= count; i += 1) {
         streamText(`Mock long line ${i} of ${count}.\n`)
         await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+      result(message.id, { stopReason: "end_turn" })
+      return
+    }
+
+    if (prompt.startsWith("/output")) {
+      const variant = prompt.split(/\s+/)[1] || "mixed"
+      if (variant === "text") streamStandardText("Mock standard text output.")
+      else if (variant === "thought") streamThought("Thinking through mock output types.")
+      else if (variant === "plan") streamPlan()
+      else if (variant === "tools") streamToolLifecycle()
+      else if (variant === "usage") streamUsage()
+      else {
+        streamPlan()
+        streamThought("Thinking through mock output types.")
+        streamToolLifecycle()
+        streamUsage()
+        streamStandardText("Mock mixed output complete.")
       }
       result(message.id, { stopReason: "end_turn" })
       return

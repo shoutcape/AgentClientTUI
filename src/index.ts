@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { cwd, execPath } from "node:process"
 import { AcpClient } from "./acp/client"
+import { normalizeSessionUpdate } from "./acp/session-update"
 import { JsonRpcTransport } from "./acp/transport"
 import type { AgentCommand, TransportEvent } from "./acp/types"
 import { CommandRegistry } from "./commands/registry"
@@ -61,23 +62,6 @@ let streamingText = ""
 let activePanelCommand: string | null = null
 let panelText = ""
 
-function extractAgentText(params: unknown): string | null {
-  if (!params || typeof params !== "object") return null
-  const p = params as Record<string, unknown>
-  if (typeof p.text === "string") return p.text
-  if (typeof p.content === "string") return p.content
-  if (typeof p.delta === "string") return p.delta
-  if (p.update && typeof p.update === "object") {
-    const u = p.update as Record<string, unknown>
-    if (typeof u.text === "string") return u.text
-    if (u.content && typeof u.content === "object") {
-      const c = u.content as Record<string, unknown>
-      if (typeof c.text === "string") return c.text
-    }
-  }
-  return null
-}
-
 transport.onEvent((event) => {
   if (event.type === "notification") {
     if (event.method === "_kiro.dev/commands/available") {
@@ -97,19 +81,21 @@ transport.onEvent((event) => {
       return
     }
 
-    const text = extractAgentText(event.params)
-    if (text !== null) {
+    const update = normalizeSessionUpdate(event.method, event.params)
+    if (update?.type === "agent-text") {
       if (activePanelCommand) {
-        panelText += text
+        panelText += update.text
         ui.updatePanel(panelText)
       } else if (!isStreaming) {
         isStreaming = true
-        streamingText = text
+        streamingText = update.text
         ui.append({ kind: "agent", text: streamingText })
       } else {
-        streamingText += text
+        streamingText += update.text
         ui.updateLast(streamingText)
       }
+    } else if (update) {
+      ui.append({ kind: update.type, text: update.text })
     }
   } else if (event.type === "stderr") {
     ui.append({ kind: "log", text: event.text.trim() })

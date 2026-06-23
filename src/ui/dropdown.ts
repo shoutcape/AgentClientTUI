@@ -61,7 +61,8 @@ export function buildDropdown(
     ),
   )
 
-  const totalHeight = 1 + (isLoading ? 1 : visibleItems.length) + 1
+  const rowCount = (state.phase === "drilldown" ? 1 : 0) + (isLoading ? 1 : visibleItems.length) + 1
+  const totalHeight = rowCount + 2
   return Box(
     {
       flexDirection: "column",

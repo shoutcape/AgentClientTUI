@@ -21,6 +21,12 @@ function createMockCommandRegistry(): CommandRegistry {
       subcommands: ["show", "add", "clear"],
     },
     { name: "/long", description: "Stream a long mock transcript response", source: "acp" },
+    {
+      name: "/output",
+      description: "Emit mock ACP output variants",
+      source: "acp",
+      subcommands: ["text", "thought", "plan", "tools", "usage", "mixed"],
+    },
     ...Array.from({ length: 16 }, (_, i) => {
       const n = i + 1
       return { name: `/mock-${n}`, description: `Mock command ${n}`, source: "acp" as const }
@@ -48,6 +54,31 @@ describe("OpenTUI command e2e", () => {
 
       expect(inputIndex).toBeGreaterThan(contentBottomIndex)
       expect(lines[inputIndex]).not.toContain("└")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("renders ACP output transcript kinds", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      ui.append({ kind: "plan", text: "[completed] Inspect workspace" })
+      ui.append({ kind: "thought", text: "Thinking through mock output types." })
+      ui.append({ kind: "tool", text: "read completed: Found package metadata." })
+      ui.append({ kind: "usage", text: "usage 53000/200000 tokens, 0.045 USD" })
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("□ plan")
+      expect(frame).toContain("[completed] Inspect workspace")
+      expect(frame).toContain("◇ thought")
+      expect(frame).toContain("◦ tool")
+      expect(frame).toContain("↯ usage")
     } finally {
       ui.destroy()
     }
@@ -115,6 +146,33 @@ describe("OpenTUI command e2e", () => {
       expect(frame).toContain("/mock-12")
       expect(frame).toContain("Mock command 12")
       expect(frame).not.toContain("/model - Switch mock model")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("slash dropdown keeps drilldown items inside its border", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      await testRenderer.flush()
+      await testRenderer.mockInput.typeText("output")
+      await testRenderer.flush()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      const lines = testRenderer.captureCharFrame().split("\n")
+      const mixedLine = lines.find((line) => line.includes("mixed")) ?? ""
+      const helpLine = lines.find((line) => line.includes("Enter select")) ?? ""
+
+      expect(mixedLine).toContain("│ mixed")
+      expect(mixedLine).not.toContain("└")
+      expect(helpLine).toContain("│ ↑↓ navigate")
     } finally {
       ui.destroy()
     }

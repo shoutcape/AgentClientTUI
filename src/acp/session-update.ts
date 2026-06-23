@@ -1,0 +1,115 @@
+import type { JsonValue } from "./types"
+
+export type NormalizedSessionUpdate =
+  | { type: "agent-text"; text: string; messageId?: string }
+  | { type: "thought"; text: string; messageId?: string }
+  | { type: "tool"; text: string; toolCallId?: string }
+  | { type: "plan"; text: string }
+  | { type: "usage"; text: string }
+  | { type: "status"; text: string }
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
+
+function textFromContent(content: unknown): string | null {
+  const c = asRecord(content)
+  if (!c) return null
+  if (c.type === "text" && typeof c.text === "string") return c.text
+  return null
+}
+
+function formatToolContent(content: unknown): string[] {
+  if (!Array.isArray(content)) return []
+  return content.flatMap((item) => {
+    const record = asRecord(item)
+    if (!record) return []
+    if (record.type === "content") {
+      const text = textFromContent(record.content)
+      return text ? [text] : []
+    }
+    if (record.type === "diff" && typeof record.path === "string") return [`diff ${record.path}`]
+    if (record.type === "terminal" && typeof record.terminalId === "string") return [`terminal ${record.terminalId}`]
+    return []
+  })
+}
+
+export function normalizeSessionUpdate(method: string, params: JsonValue | undefined): NormalizedSessionUpdate | null {
+  if (method !== "session/update" && method !== "_kiro.dev/session/update") return null
+
+  const p = asRecord(params)
+  const update = asRecord(p?.update)
+  if (!update) return null
+
+  const updateType = typeof update.sessionUpdate === "string"
+    ? update.sessionUpdate
+    : typeof update.type === "string" ? update.type : undefined
+
+  if (updateType === "agent_message_chunk") {
+    const text = typeof update.text === "string" ? update.text : textFromContent(update.content)
+    if (text == null) return null
+    return {
+      type: "agent-text",
+      text,
+      ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+    }
+  }
+
+  if (updateType === "agent_thought_chunk") {
+    const text = typeof update.text === "string" ? update.text : textFromContent(update.content)
+    if (text == null) return null
+    return {
+      type: "thought",
+      text,
+      ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),
+    }
+  }
+
+  if (updateType === "plan") {
+    const entries = Array.isArray(update.entries) ? update.entries : []
+    const lines = entries.flatMap((entry) => {
+      const e = asRecord(entry)
+      if (!e || typeof e.content !== "string") return []
+      const status = typeof e.status === "string" ? e.status : "pending"
+      return [`[${status}] ${e.content}`]
+    })
+    return { type: "plan", text: lines.join("\n") }
+  }
+
+  if (updateType === "tool_call") {
+    const kind = typeof update.kind === "string" ? update.kind : "tool"
+    const status = typeof update.status === "string" ? update.status : "pending"
+    const title = typeof update.title === "string" ? update.title : "tool call"
+    return {
+      type: "tool",
+      text: `${kind} ${status}: ${title}`,
+      ...(typeof update.toolCallId === "string" ? { toolCallId: update.toolCallId } : {}),
+    }
+  }
+
+  if (updateType === "tool_call_update") {
+    const status = typeof update.status === "string" ? update.status : "updated"
+    const lines = formatToolContent(update.content)
+    return {
+      type: "tool",
+      text: lines.length ? `${status}: ${lines.join("\n")}` : status,
+      ...(typeof update.toolCallId === "string" ? { toolCallId: update.toolCallId } : {}),
+    }
+  }
+
+  if (updateType === "usage_update") {
+    const used = typeof update.used === "number" ? update.used : 0
+    const size = typeof update.size === "number" ? update.size : 0
+    const cost = asRecord(update.cost)
+    const costText = cost && typeof cost.amount === "number" && typeof cost.currency === "string"
+      ? `, ${cost.amount} ${cost.currency}`
+      : ""
+    return { type: "usage", text: `usage ${used}/${size} tokens${costText}` }
+  }
+
+  if (updateType === "current_mode_update" && typeof update.currentModeId === "string") {
+    return { type: "status", text: `mode ${update.currentModeId}` }
+  }
+
+  return updateType ? { type: "status", text: `unhandled ${updateType}` } : null
+}
