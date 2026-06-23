@@ -1,4 +1,4 @@
-import { Box, Text, TextAttributes, createCliRenderer, fg, t, type KeyEvent } from "@opentui/core"
+import { Box, Text, TextAttributes, createCliRenderer, decodePasteBytes, fg, t, type KeyEvent } from "@opentui/core"
 import { CommandRegistry } from "./commands/registry"
 import { transition, idle, type CommandState, type CommandEvent } from "./commands/state"
 import { buildDropdown } from "./ui/dropdown"
@@ -32,7 +32,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   let renderer: Awaited<ReturnType<typeof createCliRenderer>>
 
   try {
-    renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 30 })
+    renderer = await createCliRenderer({ exitOnCtrlC: false, targetFps: 30 })
   } catch (error) {
     process.stderr.write(`OpenTUI unavailable, falling back to text mode: ${(error as Error).message}\n`)
     return createTextUi()
@@ -48,6 +48,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   const registry = options.registry ?? new CommandRegistry()
   const fetchOptions = options.onFetchOptions
   let panelOverlay: { title: string; content: string } | null = null
+  let pendingExit = false
 
   function getCommandItems(): Array<{ name: string; description: string }> {
     if (commandState.phase === "listing") {
@@ -208,7 +209,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             backgroundColor: opencodeTheme.background,
           },
           Text({ content: cwdPath, fg: opencodeTheme.textMuted }),
-          Text({ content: "/ commands · Ctrl+P palette · Ctrl+C exit", fg: opencodeTheme.textMuted }),
+          Text({ content: pendingExit ? "press Ctrl+C again to exit" : "/ commands · Ctrl+P palette · Ctrl+C exit", fg: pendingExit ? opencodeTheme.warning : opencodeTheme.textMuted }),
         ),
       ),
     )
@@ -235,6 +236,22 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   })
 
   renderer.keyInput.on("keypress", (key: KeyEvent) => {
+    if (key.name === "c" && key.ctrl) {
+      if (inputValue) {
+        inputValue = ""
+        pendingExit = false
+      } else if (!pendingExit) {
+        pendingExit = true
+      } else {
+        renderer.destroy()
+        process.exit(0)
+      }
+      render()
+      return
+    }
+
+    pendingExit = false
+
     if (key.name === "p" && key.ctrl) {
       const result = transition(commandState, { type: "ctrl-p" })
       commandState = result.state
@@ -313,6 +330,13 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     if (result.submit && submitHandler) {
       void submitHandler(result.submit)
     }
+  })
+
+  renderer.keyInput.on("paste", (event: { bytes: Uint8Array }) => {
+    const text = decodePasteBytes(event.bytes).replace(/\r\n?/g, " ")
+    inputValue += text
+    cursorVisible = true
+    render()
   })
 
   return {
