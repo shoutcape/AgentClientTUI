@@ -32,9 +32,8 @@ const required = [
   "● status initialized",
   "● status session mock-session-1",
   "● user Say hello from AgentClientTUI.",
-  "session/update",
-  "● status prompt response",
-  "● status complete",
+  "◆ assistant",
+  "● status ready",
 ]
 
 const missing = required.filter((needle) => !stdout.includes(needle))

@@ -70,6 +70,10 @@ function extractAgentText(params: unknown): string | null {
   if (typeof p.text === "string") return p.text
   if (typeof p.content === "string") return p.content
   if (typeof p.delta === "string") return p.delta
+  if (p.update && typeof p.update === "object") {
+    const u = p.update as Record<string, unknown>
+    if (typeof u.text === "string") return u.text
+  }
   return null
 }
 
