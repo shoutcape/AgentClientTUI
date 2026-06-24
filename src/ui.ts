@@ -36,6 +36,7 @@ import {
 
 export type UiOptions = {
   headless?: boolean
+  agentLabel?: string
   registry?: CommandRegistry
   onFetchOptions?: (method: string) => Promise<CommandOption[]>
   renderer?: Awaited<ReturnType<typeof createCliRenderer>>
@@ -91,6 +92,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   const disableTerminalFocusReporting = enableTerminalFocusReporting(renderer as unknown as TerminalFocusRenderer)
 
   let status = "starting"
+  const agentLabel = options.agentLabel ?? "mock-agent"
   let inputValue = ""
   let windowActive = true
   let cursorVisible = true
@@ -380,7 +382,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
           },
           Text({ content: "session", fg: opencodeTheme.primary, attributes: TextAttributes.BOLD }),
           Text({ content: `status  ${status}`, fg: opencodeTheme.text }),
-          Text({ content: "server  mock-agent", fg: opencodeTheme.textMuted }),
+          Text({ content: `server  ${agentLabel}`, fg: opencodeTheme.textMuted }),
           Text({ content: "mode    demo", fg: opencodeTheme.textMuted }),
           Text({ content: "", fg: opencodeTheme.textMuted }),
           Text({ content: "capabilities", fg: opencodeTheme.accent }),

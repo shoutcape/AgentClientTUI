@@ -1,5 +1,6 @@
 import { join } from "node:path"
 import { cwd, execPath } from "node:process"
+import { commandFromShellText } from "./agent-command"
 import { AcpClient } from "./acp/client"
 import { selectPermissionOption } from "./acp/permission"
 import { normalizeSessionUpdate } from "./acp/session-update"
@@ -36,16 +37,6 @@ function isBunRuntime(): boolean {
   return typeof process.versions.bun === "string"
 }
 
-function commandFromShellText(commandText: string): AgentCommand {
-  const parts = commandText.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((part) => part.replace(/^"|"$/g, "")) ?? []
-  const [command, ...args] = parts
-  if (!command) {
-    throw new Error("Agent command was empty")
-  }
-
-  return { command, args, label: commandText }
-}
-
 function commandsFromAvailableCommandsUpdate(params: unknown): Array<{ name: string; description: string; source: "acp" }> | null {
   const record = params && typeof params === "object" && !Array.isArray(params) ? params as { update?: unknown } : null
   const update = record?.update && typeof record.update === "object" && !Array.isArray(record.update)
@@ -70,6 +61,7 @@ const client = new AcpClient(transport)
 
 const ui = await createAgentClientUi({
   headless,
+  agentLabel: agent.label,
   registry,
   onFetchOptions: (method) => client.fetchOptions(method),
 })

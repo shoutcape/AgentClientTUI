@@ -88,6 +88,25 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("renders configured agent label in session sidebar", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      agentLabel: "opencode acp",
+    })
+
+    try {
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("server  opencode acp")
+      expect(frame).not.toContain("server  mock-agent")
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("enables terminal focus reporting and disables it on destroy", async () => {
     const stdout = new CapturingStdout()
     const renderer = await createCliRenderer({
