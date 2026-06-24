@@ -47,6 +47,10 @@ export class AcpClient {
     }), "session/prompt")
   }
 
+  cancel(sessionId: string): void {
+    this.transport.notify("session/cancel", { sessionId })
+  }
+
   async fetchOptions(method: string): Promise<Array<{ label: string; value: string; description?: string }>> {
     const result = await this.transport.request(method, {})
     if (Array.isArray(result)) {

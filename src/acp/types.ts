@@ -41,6 +41,8 @@ export type JsonRpcError = {
 
 export type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcSuccess | JsonRpcError
 
+export type ClientRequestHandler = (method: string, params: JsonValue | undefined) => Promise<JsonValue> | JsonValue
+
 export type TransportEvent =
   | { type: "notification"; method: string; params: JsonValue | undefined }
   | { type: "stderr"; text: string }

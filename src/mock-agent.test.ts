@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { spawn } from "node:child_process"
 import { join } from "node:path"
+import { JsonRpcTransport } from "./acp/transport"
 
 type RpcMessage = { jsonrpc?: "2.0"; id?: number; method?: string; params?: unknown; result?: unknown; error?: unknown }
 
 let child: ReturnType<typeof spawn> | undefined
 
-function startMockAgent(): { send: (method: string, params?: unknown) => number; next: () => Promise<RpcMessage> } {
+function startMockAgent(): { send: (method: string, params?: unknown) => number; write: (message: RpcMessage) => void; next: () => Promise<RpcMessage> } {
   const agentProcess = spawn(join(process.cwd(), "node_modules", ".bin", "tsx"), ["src/mock-agent.ts"], {
     stdio: ["pipe", "pipe", "ignore"],
   })
@@ -34,6 +35,9 @@ function startMockAgent(): { send: (method: string, params?: unknown) => number;
       const id = nextId++
       agentProcess.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
       return id
+    },
+    write(message) {
+      agentProcess.stdin.write(`${JSON.stringify(message)}\n`)
     },
     next() {
       const message = queue.shift()
@@ -199,5 +203,141 @@ describe("mock ACP agent commands", () => {
       params: { update: { sessionUpdate: "tool_call_update", content: [{ type: "diff", path: "src/example.ts", oldText: expect.stringContaining("before"), newText: expect.stringContaining("after") }] } },
     })
     expect(await agent.next()).toMatchObject({ id: diffPromptId, result: { stopReason: "end_turn" } })
+  })
+
+  test("continues after unsupported incoming client request response", async () => {
+    const agent = startMockAgent()
+    agent.send("initialize")
+    await agent.next()
+    agent.send("session/new")
+    await agent.next()
+    await agent.next()
+
+    const promptId = agent.send("session/prompt", { prompt: "/client-request unsupported" })
+    const clientRequest = await agent.next()
+    expect(clientRequest.jsonrpc).toBe("2.0")
+    expect(clientRequest.method).toBe("mock/unsupportedClientRequest")
+    expect(typeof clientRequest.id).toBe("number")
+    const clientRequestId = clientRequest.id as number
+
+    agent.write({
+      jsonrpc: "2.0",
+      id: clientRequestId,
+      error: { code: -32601, message: "Unsupported client request: mock/unsupportedClientRequest" },
+    })
+
+    expect(await agent.next()).toMatchObject({ id: promptId, result: { stopReason: "end_turn" } })
+  })
+
+  test("transport responds to unsupported incoming client requests", async () => {
+    const transport = new JsonRpcTransport({
+      command: join(process.cwd(), "node_modules", ".bin", "tsx"),
+      args: ["src/mock-agent.ts"],
+      label: "mock-agent",
+    })
+    const protocolErrors: string[] = []
+    transport.onEvent((event) => {
+      if (event.type === "protocol-error") protocolErrors.push(event.message)
+    })
+
+    try {
+      await transport.request("initialize")
+      await transport.request("session/new")
+      const result = await transport.request("session/prompt", { prompt: "/client-request unsupported" })
+
+      expect(result).toEqual({ stopReason: "end_turn" })
+      expect(protocolErrors).toEqual([])
+    } finally {
+      transport.destroy()
+    }
+  })
+
+  test("requests permission and streams selected option", async () => {
+    const transport = new JsonRpcTransport({
+      command: join(process.cwd(), "node_modules", ".bin", "tsx"),
+      args: ["src/mock-agent.ts"],
+      label: "mock-agent",
+    })
+    const agentText: string[] = []
+    transport.onEvent((event) => {
+      if (event.type !== "notification") return
+      const params = event.params as { update?: { text?: string } } | undefined
+      if (event.method === "session/update" && params?.update?.text) agentText.push(params.update.text)
+    })
+    transport.onRequest("session/request_permission", () => ({
+      outcome: {
+        outcome: "selected",
+        optionId: "allow-once",
+      },
+    }))
+
+    try {
+      await transport.request("initialize")
+      await transport.request("session/new")
+      const result = await transport.request("session/prompt", { prompt: "/permission" })
+
+      expect(result).toEqual({ stopReason: "end_turn" })
+      expect(agentText.join("")).toContain("Permission selected: allow-once")
+    } finally {
+      transport.destroy()
+    }
+  })
+
+  test("permission request fails when client has no handler", async () => {
+    const transport = new JsonRpcTransport({
+      command: join(process.cwd(), "node_modules", ".bin", "tsx"),
+      args: ["src/mock-agent.ts"],
+      label: "mock-agent",
+    })
+
+    try {
+      await transport.request("initialize")
+      await transport.request("session/new")
+
+      await expect(transport.request("session/prompt", { prompt: "/permission" }))
+        .rejects.toThrow("Unsupported client request: session/request_permission")
+    } finally {
+      transport.destroy()
+    }
+  })
+
+  test("permission request fails on malformed client response", async () => {
+    const transport = new JsonRpcTransport({
+      command: join(process.cwd(), "node_modules", ".bin", "tsx"),
+      args: ["src/mock-agent.ts"],
+      label: "mock-agent",
+    })
+    transport.onRequest("session/request_permission", () => ({ outcome: { outcome: "rejected" } }))
+
+    try {
+      await transport.request("initialize")
+      await transport.request("session/new")
+
+      await expect(transport.request("session/prompt", { prompt: "/permission" }))
+        .rejects.toThrow("Invalid permission response")
+    } finally {
+      transport.destroy()
+    }
+  })
+
+  test("permission request surfaces non-error handler throws", async () => {
+    const transport = new JsonRpcTransport({
+      command: join(process.cwd(), "node_modules", ".bin", "tsx"),
+      args: ["src/mock-agent.ts"],
+      label: "mock-agent",
+    })
+    transport.onRequest("session/request_permission", () => {
+      throw "permission exploded"
+    })
+
+    try {
+      await transport.request("initialize")
+      await transport.request("session/new")
+
+      await expect(transport.request("session/prompt", { prompt: "/permission" }))
+        .rejects.toThrow("permission exploded")
+    } finally {
+      transport.destroy()
+    }
   })
 })

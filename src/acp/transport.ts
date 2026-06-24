@@ -1,16 +1,31 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
 import { createInterface } from "node:readline"
-import type { AgentCommand, JsonRpcError, JsonRpcId, JsonRpcMessage, JsonRpcSuccess, JsonValue, TransportEvent } from "./types"
+import type {
+  AgentCommand,
+  ClientRequestHandler,
+  JsonRpcError,
+  JsonRpcId,
+  JsonRpcMessage,
+  JsonRpcRequest,
+  JsonRpcSuccess,
+  JsonValue,
+  TransportEvent,
+} from "./types"
 
 type PendingRequest = {
   resolve: (value: JsonValue) => void
   reject: (error: Error) => void
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export class JsonRpcTransport {
   private child: ChildProcessWithoutNullStreams
   private nextId = 1
   private pending = new Map<JsonRpcId, PendingRequest>()
+  private requestHandlers = new Map<string, ClientRequestHandler>()
   private listeners = new Set<(event: TransportEvent) => void>()
 
   constructor(private readonly agent: AgentCommand) {
@@ -37,6 +52,11 @@ export class JsonRpcTransport {
   onEvent(listener: (event: TransportEvent) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  onRequest(method: string, handler: ClientRequestHandler): () => void {
+    this.requestHandlers.set(method, handler)
+    return () => this.requestHandlers.delete(method)
   }
 
   request(method: string, params?: JsonValue): Promise<JsonValue> {
@@ -80,6 +100,11 @@ export class JsonRpcTransport {
       return
     }
 
+    if ("id" in message && "method" in message) {
+      void this.handleRequest(message)
+      return
+    }
+
     if ("method" in message && !("id" in message)) {
       this.emit({ type: "notification", method: message.method, params: message.params })
       return
@@ -96,6 +121,35 @@ export class JsonRpcTransport {
     }
 
     this.emit({ type: "protocol-error", message: "Unrecognized JSON-RPC message from agent stdout", raw: line })
+  }
+
+  private async handleRequest(message: JsonRpcRequest): Promise<void> {
+    const handler = this.requestHandlers.get(message.method)
+    if (!handler) {
+      this.write({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: {
+          code: -32601,
+          message: `Unsupported client request: ${message.method}`,
+        },
+      })
+      return
+    }
+
+    try {
+      const result = await handler(message.method, message.params)
+      this.write({ jsonrpc: "2.0", id: message.id, result })
+    } catch (error) {
+      this.write({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: {
+          code: -32000,
+          message: errorMessage(error),
+        },
+      })
+    }
   }
 
   private resolveResponse(message: JsonRpcSuccess): void {

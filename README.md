@@ -4,7 +4,7 @@ Interactive terminal UI for ACP-compatible agent servers.
 
 AgentClientTUI is a client-side OpenTUI app. It does not implement an agent. It launches a stdio ACP server command, sends JSON-RPC messages over stdin, reads protocol messages from stdout, and renders the interaction as a terminal transcript.
 
-The bundled mock agent is for development and learning. The primary product path is attaching to real ACP servers such as `opencode serve` or Kiro ACP when they expose stdio ACP.
+The bundled mock agent is for development and learning. The primary product path is attaching to real ACP servers such as `opencode acp` or Kiro ACP when they expose stdio ACP.
 
 ## Install
 
@@ -33,8 +33,11 @@ Node mode falls back to text output if native OpenTUI FFI is unavailable.
 ## Run With Real Agent
 
 ```bash
-npm run dev -- --agent "opencode serve"
+npm run dev -- --agent "opencode acp"
+npm run dev -- --agent "opencode acp --cwd /absolute/project/path"
 ```
+
+`opencode acp` is OpenCode's ACP stdio server. `opencode serve` starts OpenCode's HTTP/OpenAPI server and is not used by AgentClientTUI yet.
 
 Replace the command with any ACP-compatible stdio server command.
 
