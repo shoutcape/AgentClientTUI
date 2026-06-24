@@ -97,6 +97,18 @@ describe("normalizeSessionUpdate", () => {
     })).toEqual({ type: "usage", text: "usage 53000/200000 tokens, 0.045 USD" })
   })
 
+  test("formats available command updates", () => {
+    expect(normalizeSessionUpdate("session/update", {
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          { name: "model", description: "Switch model" },
+          { name: "mode", description: "Switch mode" },
+        ],
+      },
+    })).toEqual({ type: "status", text: "commands updated (2)" })
+  })
+
   test("keeps legacy mock text chunks working", () => {
     expect(normalizeSessionUpdate("session/update", {
       update: { type: "agent_message_chunk", text: "legacy" },

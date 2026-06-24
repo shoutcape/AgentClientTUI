@@ -1,6 +1,7 @@
 import { join } from "node:path"
 import { cwd, execPath } from "node:process"
 import { AcpClient } from "./acp/client"
+import { selectPermissionOption } from "./acp/permission"
 import { normalizeSessionUpdate } from "./acp/session-update"
 import { JsonRpcTransport } from "./acp/transport"
 import type { AgentCommand, TransportEvent } from "./acp/types"
@@ -44,6 +45,21 @@ function commandFromShellText(commandText: string): AgentCommand {
   return { command, args, label: commandText }
 }
 
+function commandsFromAvailableCommandsUpdate(params: unknown): Array<{ name: string; description: string; source: "acp" }> | null {
+  const record = params && typeof params === "object" && !Array.isArray(params) ? params as { update?: unknown } : null
+  const update = record?.update && typeof record.update === "object" && !Array.isArray(record.update)
+    ? record.update as { sessionUpdate?: unknown; availableCommands?: unknown }
+    : null
+  if (update?.sessionUpdate !== "available_commands_update" || !Array.isArray(update.availableCommands)) return null
+  return update.availableCommands.flatMap((command) => {
+    if (!command || typeof command !== "object" || Array.isArray(command)) return []
+    const c = command as { name?: unknown; description?: unknown }
+    if (typeof c.name !== "string") return []
+    const name = c.name.startsWith("/") ? c.name : `/${c.name}`
+    return [{ name, description: typeof c.description === "string" ? c.description : "", source: "acp" as const }]
+  })
+}
+
 const { agent, headless } = parseArgs(process.argv.slice(2))
 const registry = new CommandRegistry()
 registry.addLocalCommand({ name: "Quit", description: "Exit AgentClientTUI", source: "local" })
@@ -55,6 +71,16 @@ const ui = await createAgentClientUi({
   headless,
   registry,
   onFetchOptions: (method) => client.fetchOptions(method),
+})
+
+transport.onRequest("session/request_permission", (_method, params) => {
+  ui.append({ kind: "status", text: "permission requested (auto-rejected)" })
+  return {
+    outcome: {
+      outcome: "selected",
+      optionId: selectPermissionOption(params),
+    },
+  }
 })
 
 let isStreaming = false
@@ -79,6 +105,15 @@ transport.onEvent((event) => {
       }))
       registry.setAcpCommands(descriptors)
       return
+    }
+
+    if (event.method === "session/update") {
+      const descriptors = commandsFromAvailableCommandsUpdate(event.params)
+      if (descriptors) {
+        registry.setAcpCommands(descriptors)
+        ui.append({ kind: "status", text: `commands updated (${descriptors.length})` })
+        return
+      }
     }
 
     const update = normalizeSessionUpdate(event.method, event.params)

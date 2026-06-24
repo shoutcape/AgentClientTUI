@@ -149,6 +149,11 @@ export function normalizeSessionUpdate(method: string, params: JsonValue | undef
     return { type: "usage", text: `usage ${used}/${size} tokens${costText}` }
   }
 
+  if (updateType === "available_commands_update") {
+    const count = Array.isArray(update.availableCommands) ? update.availableCommands.length : 0
+    return { type: "status", text: `commands updated (${count})` }
+  }
+
   if (updateType === "current_mode_update" && typeof update.currentModeId === "string") {
     return { type: "status", text: `mode ${update.currentModeId}` }
   }

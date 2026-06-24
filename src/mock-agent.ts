@@ -5,6 +5,13 @@ type JsonRpcMessage = {
   id?: string | number
   method?: string
   params?: unknown
+  result?: unknown
+  error?: { code?: number; message?: string }
+}
+
+type PendingClientRequest = {
+  resolve: (message: JsonRpcMessage) => void
+  reject: (error: Error & { code?: number }) => void
 }
 
 function write(message: unknown): void {
@@ -21,6 +28,8 @@ function error(id: string | number | undefined, code: number, message: string): 
 }
 
 const sessionId = "mock-session-1"
+let nextClientRequestId = 1
+const pendingClientRequests = new Map<string | number, PendingClientRequest>()
 
 const modelOptions = [
   { label: "sonnet", value: "sonnet", description: "Balanced mock model" },
@@ -78,6 +87,16 @@ function extractPrompt(params: unknown): string {
     }).join("")
   }
   return ""
+}
+
+function extractSelectedOption(message: JsonRpcMessage): string {
+  const result = message.result
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Invalid permission response")
+  const outcome = (result as { outcome?: unknown }).outcome
+  if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) throw new Error("Invalid permission response")
+  const record = outcome as { outcome?: unknown; optionId?: unknown }
+  if (record.outcome !== "selected" || typeof record.optionId !== "string") throw new Error("Invalid permission response")
+  return record.optionId
 }
 
 function streamText(text: string): void {
@@ -171,6 +190,17 @@ function streamDiff(): void {
   })
 }
 
+function clientRequest(method: string, params?: unknown): Promise<JsonRpcMessage> {
+  const id = nextClientRequestId++
+  write(params === undefined
+    ? { jsonrpc: "2.0", id, method }
+    : { jsonrpc: "2.0", id, method, params })
+
+  return new Promise((resolve, reject) => {
+    pendingClientRequests.set(id, { resolve, reject })
+  })
+}
+
 function longLineCount(prompt: string): number {
   const raw = Number.parseInt(prompt.split(/\s+/)[1] ?? "20", 10)
   if (!Number.isFinite(raw)) return 20
@@ -185,6 +215,21 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   } catch {
     error(undefined, -32700, "Parse error")
     return
+  }
+
+  if (message.id !== undefined && message.method === undefined) {
+    const pendingClientRequest = pendingClientRequests.get(message.id)
+    if (pendingClientRequest) {
+      pendingClientRequests.delete(message.id)
+      if (message.error) {
+        const requestError = new Error(message.error.message ?? "Client request failed") as Error & { code?: number }
+        if (message.error.code !== undefined) requestError.code = message.error.code
+        pendingClientRequest.reject(requestError)
+      } else {
+        pendingClientRequest.resolve(message)
+      }
+      return
+    }
   }
 
   if (message.method === "initialize") {
@@ -242,6 +287,40 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         await new Promise((resolve) => setTimeout(resolve, 1))
       }
       result(message.id, { stopReason: "end_turn" })
+      return
+    }
+
+    if (prompt.startsWith("/client-request unsupported")) {
+      try {
+        await clientRequest("mock/unsupportedClientRequest")
+      } catch (requestError) {
+        if ((requestError as Error & { code?: number }).code === -32601) {
+          result(message.id, { stopReason: "end_turn" })
+          return
+        }
+        error(message.id, -32000, (requestError as Error).message)
+        return
+      }
+      error(message.id, -32000, "Expected unsupported client request response")
+      return
+    }
+
+    if (prompt.startsWith("/permission")) {
+      try {
+        const permission = await clientRequest("session/request_permission", {
+          sessionId,
+          toolCall: { toolCallId: "mock-permission", title: "Mock permission" },
+          options: [
+            { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+            { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+          ],
+        })
+        const selected = extractSelectedOption(permission)
+        streamText(`Permission selected: ${selected}.`)
+        result(message.id, { stopReason: "end_turn" })
+      } catch (requestError) {
+        error(message.id, -32000, (requestError as Error).message)
+      }
       return
     }
 
