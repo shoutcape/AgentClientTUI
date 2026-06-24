@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Readable, Writable } from "node:stream"
-import { createCliRenderer } from "@opentui/core"
+import { createCliRenderer, ScrollBoxRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { CommandRegistry } from "../commands/registry"
 import { createAgentClientUi } from "../ui"
@@ -192,6 +192,46 @@ describe("OpenTUI command e2e", () => {
       const codeHeaderIndex = lines.findIndex((line) => line.includes("code ts"))
       const codeContentIndex = lines.findIndex((line) => line.includes("const answer = 42"))
       expect(codeContentIndex).toBe(codeHeaderIndex + 1)
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("transcript content ignores hjkl and arrow scroll keys", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 18 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      for (let i = 1; i <= 40; i += 1) {
+        ui.append({ kind: "agent", text: `transcript line ${i}` })
+      }
+      await testRenderer.flush()
+
+      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      expect(transcriptScroll).toBeDefined()
+      transcriptScroll?.scrollTo(0)
+      transcriptScroll?.focus()
+      await testRenderer.flush()
+
+      const initialScrollTop = transcriptScroll?.scrollTop
+      testRenderer.mockInput.pressKey("j")
+      await testRenderer.flush()
+      expect(transcriptScroll?.scrollTop).toBe(initialScrollTop)
+
+      testRenderer.mockInput.pressKey("k")
+      await testRenderer.flush()
+      expect(transcriptScroll?.scrollTop).toBe(initialScrollTop)
+
+      testRenderer.mockInput.pressArrow("down")
+      await testRenderer.flush()
+      expect(transcriptScroll?.scrollTop).toBe(initialScrollTop)
+
+      testRenderer.mockInput.pressArrow("up")
+      await testRenderer.flush()
+      expect(transcriptScroll?.scrollTop).toBe(initialScrollTop)
     } finally {
       ui.destroy()
     }

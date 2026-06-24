@@ -349,6 +349,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             showArrows: false,
           },
         })
+        transcriptScroll.focusable = false
       }
       syncTranscript()
 
