@@ -9,6 +9,7 @@
     "dev:node": "tsx src/index.ts",
     "mock-agent": "$HOME/.bun/bin/bun run src/mock-agent.ts",
     "smoke": "tsx scripts/smoke.ts",
+    "trace": "$HOME/.bun/bin/bun run scripts/acp-trace.ts",
     "test": "$HOME/.bun/bin/bun test",
     "typecheck": "tsc --noEmit"
   },

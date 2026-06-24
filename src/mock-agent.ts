@@ -254,6 +254,21 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
     return
   }
 
+  if (message.method === "session/list") {
+    result(message.id, {
+      sessions: [
+        {
+          sessionId,
+          title: "Mock session",
+          cwd: process.cwd(),
+          updatedAt: "2026-06-24T00:00:00.000Z",
+        },
+      ],
+      nextCursor: null,
+    })
+    return
+  }
+
   if (message.method === "_mock/commands/model/options") {
     result(message.id, { options: modelOptions })
     return
