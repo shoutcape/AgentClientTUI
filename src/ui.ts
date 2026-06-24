@@ -545,10 +545,17 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         } else if (result.effect?.type === "fetch-options" && fetchOptions) {
           const method = result.effect.method
           void (async () => {
-            const items = await fetchOptions(method)
-            if (commandState.phase === "drilldown") {
-              const loaded = transition(commandState, { type: "options-loaded", items })
-              commandState = loaded.state
+            try {
+              const items = await fetchOptions(method)
+              if (commandState.phase === "drilldown") {
+                const loaded = transition(commandState, { type: "options-loaded", items })
+                commandState = loaded.state
+                render()
+              }
+            } catch (error) {
+              transcript = appendTranscriptEntry(transcript, { kind: "error", text: `Failed to fetch options: ${(error as Error).message}` })
+              transcriptContentVersion += 1
+              commandState = idle()
               render()
             }
           })()

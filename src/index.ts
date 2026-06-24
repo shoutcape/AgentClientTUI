@@ -6,6 +6,7 @@ import { normalizeSessionUpdate } from "./acp/session-update"
 import { JsonRpcTransport } from "./acp/transport"
 import type { AgentCommand, TransportEvent } from "./acp/types"
 import { CommandRegistry } from "./commands/registry"
+import { createPromptQueue } from "./prompt-queue"
 import { createAgentClientUi } from "./ui"
 
 function parseArgs(argv: string[]): { agent: AgentCommand; headless: boolean } {
@@ -155,26 +156,7 @@ try {
   const sessionId = await client.newSession(cwd())
   ui.setStatus(`session ${sessionId}`)
 
-  let promptInFlight = false
-
-  async function sendPrompt(prompt: string, options?: { panel?: boolean }): Promise<void> {
-    // Handle local commands
-    if (prompt === "Quit") {
-      transport.destroy()
-      ui.destroy()
-      process.exit(0)
-    }
-    if (prompt === "Toggle Session Panel") {
-      ui.append({ kind: "status", text: "Toggle sidebar (not yet implemented)" })
-      return
-    }
-
-    if (promptInFlight) {
-      ui.append({ kind: "status", text: "prompt already running" })
-      return
-    }
-
-    promptInFlight = true
+  async function runPrompt(prompt: string, options?: { panel?: boolean }): Promise<void> {
     streamingText = ""
     isStreaming = false
 
@@ -195,17 +177,39 @@ try {
       ui.append({ kind: "error", text: (error as Error).message })
       ui.setStatus("failed")
     } finally {
-      promptInFlight = false
       isStreaming = false
       ui.finishAgentMessage()
       activePanelCommand = null
     }
   }
 
+  const promptQueue = createPromptQueue({
+    onQueued(prompt) {
+      ui.append({ kind: "status", text: `queued: ${prompt}` })
+    },
+    onDequeued() {},
+    run: runPrompt,
+  })
+
+  function sendPrompt(prompt: string, options?: { panel?: boolean }): void {
+    // Local commands bypass the queue — they are not agent prompts.
+    if (prompt === "Quit") {
+      transport.destroy()
+      ui.destroy()
+      process.exit(0)
+    }
+    if (prompt === "Toggle Session Panel") {
+      ui.append({ kind: "status", text: "Toggle sidebar (not yet implemented)" })
+      return
+    }
+
+    promptQueue.enqueue(prompt, options)
+  }
+
   ui.onSubmit(sendPrompt)
 
   if (headless) {
-    await sendPrompt("Say hello from AgentClientTUI.")
+    await runPrompt("Say hello from AgentClientTUI.")
     transport.destroy()
     ui.destroy()
   }
