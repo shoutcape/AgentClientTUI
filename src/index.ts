@@ -191,7 +191,7 @@ try {
       process.exit(0)
     }
     if (prompt === "Toggle Session Panel") {
-      ui.append({ kind: "status", text: "Toggle sidebar (not yet implemented)" })
+      ui.toggleSidebar()
       return
     }
 

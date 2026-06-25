@@ -52,6 +52,7 @@ export type AgentClientUi = {
   showPanel(title: string): void
   updatePanel(content: string): void
   hidePanel(): void
+  toggleSidebar(): void
   destroy(): void
 }
 
@@ -102,10 +103,15 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   const registry = options.registry ?? new CommandRegistry()
   const fetchOptions = options.onFetchOptions
   let panelOverlay: { title: string; content: string } | null = null
+  let sidebarVisible = true
   let pendingExit = false
   let transcriptScroll: ScrollBoxRenderable | undefined
   let transcriptContentVersion = 0
   let renderedTranscriptVersion = -1
+  let renderedNodeCount = 0
+  let activeStreamRenderable: TextRenderable | null = null
+  let activeStreamNodeId: string | null = null
+  let renderScheduled = false
 
   function getItemLabel(item: CommandItem): string {
     return typeof item === "string" ? item : item.label
@@ -279,12 +285,44 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     if (!transcriptScroll) return
     if (renderedTranscriptVersion === transcriptContentVersion) return
 
-    for (const child of [...transcriptScroll.getChildren()]) {
-      transcriptScroll.remove(child.id)
+    // If the active streaming node changed, update its text in place
+    if (activeStreamNodeId && transcript.activeAgentNodeId === activeStreamNodeId && activeStreamRenderable) {
+      const node = transcript.nodes.find((n) => n.id === activeStreamNodeId)
+      if (node && node.blocks[0]?.type === "text") {
+        activeStreamRenderable.content = node.blocks[0].text
+        renderedTranscriptVersion = transcriptContentVersion
+        return
+      }
     }
 
-    for (const node of transcript.nodes) {
-      transcriptScroll.add(buildTranscriptMessage(node))
+    // Append only new nodes
+    const nodes = transcript.nodes
+    for (let i = renderedNodeCount; i < nodes.length; i++) {
+      const node = nodes[i]
+      if (!node) continue
+      const msg = buildTranscriptMessage(node)
+      transcriptScroll.add(msg)
+
+      // Track the active streaming node's text renderable
+      if (node.id === transcript.activeAgentNodeId && node.kind === "agent") {
+        activeStreamNodeId = node.id
+        const nodeBox = msg as BoxRenderable
+        const children = nodeBox.getChildren()
+        if (children.length > 0) {
+          const row = children[0] as BoxRenderable
+          const rowChildren = row.getChildren()
+          if (rowChildren.length > 1 && rowChildren[1] instanceof TextRenderable) {
+            activeStreamRenderable = rowChildren[1]
+          }
+        }
+      }
+    }
+    renderedNodeCount = nodes.length
+
+    // If active agent finished, clear tracking
+    if (!transcript.activeAgentNodeId) {
+      activeStreamRenderable = null
+      activeStreamNodeId = null
     }
 
     renderedTranscriptVersion = transcriptContentVersion
@@ -316,10 +354,20 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     return false
   }
 
+  function scheduleRender(): void {
+    if (renderScheduled) return
+    renderScheduled = true
+    queueMicrotask(() => {
+      renderScheduled = false
+      render()
+    })
+  }
+
   function render(): void {
-    if (renderer.root.getRenderable("app-root")) {
-      renderer.root.remove("app-root")
-    }
+    try {
+      if (renderer.root.getRenderable("app-root")) {
+        renderer.root.remove("app-root")
+      }
 
     const inputBar = buildInputBar(inputValue, { cursorVisible: windowActive && cursorVisible })
     const cwdPath = process.cwd()
@@ -353,6 +401,29 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       }
       syncTranscript()
 
+      const sidebar = sidebarVisible
+        ? Box(
+            {
+              flexDirection: "column",
+              width: 34,
+              backgroundColor: opencodeTheme.backgroundPanel,
+              borderStyle: "single",
+              borderColor: opencodeTheme.borderSubtle,
+              padding: 1,
+              gap: 1,
+            },
+            Text({ content: "session", fg: opencodeTheme.primary, attributes: TextAttributes.BOLD }),
+            Text({ content: `status  ${status}`, fg: opencodeTheme.text }),
+            Text({ content: `server  ${agentLabel}`, fg: opencodeTheme.textMuted }),
+            Text({ content: "mode    demo", fg: opencodeTheme.textMuted }),
+            Text({ content: "", fg: opencodeTheme.textMuted }),
+            Text({ content: "capabilities", fg: opencodeTheme.accent }),
+            Text({ content: "● prompt", fg: opencodeTheme.success }),
+            Text({ content: "● stream", fg: opencodeTheme.success }),
+            Text({ content: "· tools pending", fg: opencodeTheme.textMuted }),
+          )
+        : null
+
       return Box(
         { flexDirection: "row", flexGrow: 1, width: "100%", gap: 1 },
         Box(
@@ -371,26 +442,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             transcriptScroll,
           ),
         ),
-        Box(
-          {
-            flexDirection: "column",
-            width: 34,
-            backgroundColor: opencodeTheme.backgroundPanel,
-            borderStyle: "single",
-            borderColor: opencodeTheme.borderSubtle,
-            padding: 1,
-            gap: 1,
-          },
-          Text({ content: "session", fg: opencodeTheme.primary, attributes: TextAttributes.BOLD }),
-          Text({ content: `status  ${status}`, fg: opencodeTheme.text }),
-          Text({ content: `server  ${agentLabel}`, fg: opencodeTheme.textMuted }),
-          Text({ content: "mode    demo", fg: opencodeTheme.textMuted }),
-          Text({ content: "", fg: opencodeTheme.textMuted }),
-          Text({ content: "capabilities", fg: opencodeTheme.accent }),
-          Text({ content: "● prompt", fg: opencodeTheme.success }),
-          Text({ content: "● stream", fg: opencodeTheme.success }),
-          Text({ content: "· tools pending", fg: opencodeTheme.textMuted }),
-        ),
+        sidebar,
       )
     })()
 
@@ -472,6 +524,10 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         paletteElement,
       ),
     )
+    } catch (err) {
+      // Prevent permanent blank screen - attempt recovery on next frame
+      process.stderr.write(`[render error] ${(err as Error).message}\n`)
+    }
   }
 
   render()
@@ -628,7 +684,13 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     updateLast(text) {
       transcript = updateActiveAgentMessage(transcript, text)
       transcriptContentVersion += 1
-      render()
+      // Fast path: update text in place without full tree rebuild
+      if (activeStreamRenderable && activeStreamNodeId === transcript.activeAgentNodeId) {
+        activeStreamRenderable.content = text
+        renderedTranscriptVersion = transcriptContentVersion
+      } else {
+        scheduleRender()
+      }
     },
     finishAgentMessage() {
       transcript = finishTranscriptAgentMessage(transcript)
@@ -645,6 +707,10 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     },
     hidePanel() {
       panelOverlay = null
+      render()
+    },
+    toggleSidebar() {
+      sidebarVisible = !sidebarVisible
       render()
     },
     destroy() {
@@ -672,6 +738,7 @@ function createTextUi(): AgentClientUi {
     showPanel() {},
     updatePanel() {},
     hidePanel() {},
+    toggleSidebar() {},
     destroy() {},
   }
 }
