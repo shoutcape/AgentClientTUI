@@ -107,6 +107,51 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("hides the session sidebar on narrow screens", async () => {
+    const testRenderer = await createTestRenderer({ width: 80, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      agentLabel: "opencode acp",
+    })
+
+    try {
+      await testRenderer.flush()
+
+      expect(testRenderer.captureCharFrame()).not.toContain("server  opencode acp")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("lets the sidebar be shown on narrow screens until width returns to auto", async () => {
+    const testRenderer = await createTestRenderer({ width: 80, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      agentLabel: "opencode acp",
+    })
+
+    try {
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).not.toContain("server  opencode acp")
+
+      ui.toggleSidebar()
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("server  opencode acp")
+
+      testRenderer.resize(100, 30)
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("server  opencode acp")
+
+      testRenderer.resize(80, 30)
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).not.toContain("server  opencode acp")
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("enables terminal focus reporting and disables it on destroy", async () => {
     const stdout = new CapturingStdout()
     const renderer = await createCliRenderer({
