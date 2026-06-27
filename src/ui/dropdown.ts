@@ -1,14 +1,14 @@
 import { Box, Text } from "@opentui/core"
 import type { CommandState } from "../commands/state"
+import { buildCommandListWindow, type CommandListDisplayItem } from "./command-list"
 import { opencodeTheme } from "./view"
 
 export function buildDropdown(
   state: Extract<CommandState, { phase: "listing" | "drilldown" }>,
-  items: Array<{ name: string; description: string }>,
+  items: CommandListDisplayItem[],
 ) {
   const maxVisible = 8
-  const scrollStart = Math.max(0, Math.min(state.selectedIndex - maxVisible + 1, items.length - maxVisible))
-  const visibleItems = items.slice(scrollStart, scrollStart + maxVisible)
+  const listWindow = buildCommandListWindow(items, state.selectedIndex, maxVisible)
   const isLoading = state.phase === "drilldown" && state.loading
 
   const children = []
@@ -30,8 +30,7 @@ export function buildDropdown(
       ),
     )
   } else {
-    visibleItems.forEach((item, i) => {
-      const selected = (i + scrollStart) === state.selectedIndex
+    listWindow.rows.forEach(({ item, selected }) => {
       const boxOpts: Record<string, unknown> = {
         flexDirection: "row",
         width: "100%",
@@ -61,7 +60,7 @@ export function buildDropdown(
     ),
   )
 
-  const rowCount = (state.phase === "drilldown" ? 1 : 0) + (isLoading ? 1 : visibleItems.length) + 1
+  const rowCount = (state.phase === "drilldown" ? 1 : 0) + (isLoading ? 1 : listWindow.rows.length) + 1
   const totalHeight = rowCount + 2
   return Box(
     {

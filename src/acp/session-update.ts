@@ -1,4 +1,5 @@
 import type { JsonValue } from "./types"
+import { recordOrNull as asRecord } from "./json"
 
 export type NormalizedSessionUpdate =
   | { type: "agent-text"; text: string; messageId?: string }
@@ -12,10 +13,6 @@ export type NormalizedBlock =
   | { type: "text"; text: string }
   | { type: "code"; text: string; language?: string }
   | { type: "diff"; path?: string; oldText?: string; newText?: string; patch?: string }
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
-}
 
 function textFromContent(content: unknown): string | null {
   const c = asRecord(content)

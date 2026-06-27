@@ -34,7 +34,7 @@ function createCapturingStdin() {
 
 function createMockCommandRegistry(): CommandRegistry {
   const registry = new CommandRegistry()
-    registry.setAcpCommands([
+  registry.setAcpCommands([
     {
       name: "/model",
       description: "Switch mock model",
@@ -76,7 +76,40 @@ function createMockCommandRegistry(): CommandRegistry {
   return registry
 }
 
+async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
+  const chunks: string[] = []
+  const originalWrite = process.stdout.write
+  process.stdout.write = ((chunk: string | Uint8Array, encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
+    chunks.push(Buffer.from(chunk).toString("utf8"))
+    if (typeof encodingOrCallback === "function") encodingOrCallback()
+    if (callback) callback()
+    return true
+  }) as typeof process.stdout.write
+
+  try {
+    await run()
+  } finally {
+    process.stdout.write = originalWrite
+  }
+
+  return chunks.join("")
+}
+
 describe("OpenTUI command e2e", () => {
+  test("headless mode uses text UI output", async () => {
+    const output = await withCapturedStdout(async () => {
+      const ui = await createAgentClientUi({ headless: true })
+
+      expect(ui.isInteractive).toBe(false)
+      ui.setStatus("ready")
+      ui.append({ kind: "agent", text: "hello text mode" })
+      ui.destroy()
+    })
+
+    expect(output).toContain("● status ready")
+    expect(output).toContain("◆ assistant hello text mode")
+  })
+
   test("renders input bar below the content panels", async () => {
     const testRenderer = await createTestRenderer({ width: 100, height: 30 })
     const ui = await createAgentClientUi({
@@ -314,6 +347,29 @@ describe("OpenTUI command e2e", () => {
       expect(firstRoot?.isDestroyed).toBe(true)
       expect(firstScroll?.isDestroyed).toBe(false)
       expect(testRenderer.renderer.root.findDescendantById("transcript-scroll")).toBe(firstScroll)
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("updateLast updates the active agent row in place", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      ui.append({ kind: "agent", text: "stream-old-token" })
+      await testRenderer.flush()
+
+      ui.updateLast("stream-final-token")
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("stream-final-token")
+      expect(frame).not.toContain("stream-old-token")
+      expect(frame.match(/◆ assistant/g)?.length ?? 0).toBe(1)
     } finally {
       ui.destroy()
     }
@@ -884,6 +940,55 @@ describe("OpenTUI command e2e", () => {
       await testRenderer.flush()
 
       expect(submissions).toEqual([{ prompt: "/model claude-sonnet", panel: false }])
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("selects config command option and refreshes config commands", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const setConfigCalls: Array<{ configId: string; value: string }> = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      onSetConfigOption: async (configId, value) => {
+        setConfigCalls.push({ configId, value })
+        return [{
+          id: "mode",
+          name: "Mode",
+          type: "select",
+          currentValue: "plan",
+          options: [{ value: "plan", name: "Plan" }],
+        }]
+      },
+    })
+
+    try {
+      testRenderer.mockInput.pressKey("p", { ctrl: true })
+      await testRenderer.flush()
+      await testRenderer.mockInput.typeText("models")
+      await testRenderer.flush()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      expect(testRenderer.captureCharFrame()).toContain("sonnet")
+
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      await testRenderer.flush()
+
+      expect(setConfigCalls).toEqual([{ configId: "model", value: "anthropic/claude-sonnet" }])
+      let frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("set model to anthropic/claude-sonnet")
+
+      testRenderer.mockInput.pressKey("p", { ctrl: true })
+      await testRenderer.flush()
+      await testRenderer.mockInput.typeText("mode")
+      await testRenderer.flush()
+
+      frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("Mode")
     } finally {
       ui.destroy()
     }

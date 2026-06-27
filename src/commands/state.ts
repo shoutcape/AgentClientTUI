@@ -1,6 +1,6 @@
-import type { CommandDescriptor } from "./registry"
+import type { CommandDescriptor, CommandOption } from "./registry"
 
-export type CommandOption = { label: string; value: string; description?: string }
+export type { CommandOption }
 export type CommandItem = string | CommandOption
 
 export type CommandState =
