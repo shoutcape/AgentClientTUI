@@ -1,5 +1,6 @@
 import type { JsonObject, JsonValue } from "./types"
 import { JsonRpcTransport } from "./transport"
+import type { SessionConfigOption } from "../commands/acp"
 
 function asObject(value: JsonValue, label: string): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -31,13 +32,16 @@ export class AcpClient {
     }), "initialize")
   }
 
-  async newSession(cwd: string): Promise<string> {
+  async newSession(cwd: string): Promise<{ sessionId: string; configOptions: SessionConfigOption[] }> {
     const result = asObject(await this.transport.request("session/new", {
       cwd,
       mcpServers: [],
     }), "session/new")
 
-    return asString(result.sessionId, "sessionId")
+    return {
+      sessionId: asString(result.sessionId, "sessionId"),
+      configOptions: Array.isArray(result.configOptions) ? result.configOptions as SessionConfigOption[] : [],
+    }
   }
 
   async prompt(sessionId: string, text: string): Promise<JsonObject> {
@@ -49,6 +53,15 @@ export class AcpClient {
 
   cancel(sessionId: string): void {
     this.transport.notify("session/cancel", { sessionId })
+  }
+
+  async setConfigOption(sessionId: string, configId: string, value: string): Promise<SessionConfigOption[]> {
+    const result = asObject(await this.transport.request("session/set_config_option", {
+      sessionId,
+      configId,
+      value,
+    }), "session/set_config_option")
+    return Array.isArray(result.configOptions) ? result.configOptions as SessionConfigOption[] : []
   }
 
   async fetchOptions(method: string): Promise<Array<{ label: string; value: string; description?: string }>> {
