@@ -25,6 +25,7 @@ export type CommandEffect =
   | { type: "execute"; command: string }
   | { type: "fetch-options"; method: string }
   | { type: "set-input"; text: string }
+  | { type: "set-config-option"; configId: string; value: string }
 
 export type TransitionResult = {
   state: CommandState
@@ -83,6 +84,11 @@ function transitionListing(state: Extract<CommandState, { phase: "listing" }>, e
         effect: { type: "fetch-options", method: cmd.optionsMethod },
       }
     }
+    if (cmd.options && cmd.options.length > 0) {
+      return {
+        state: { phase: "drilldown", parent: cmd, items: cmd.options, loading: false, query: "", selectedIndex: 0, surface: state.surface },
+      }
+    }
     if (cmd.subcommands && cmd.subcommands.length > 0) {
       return {
         state: { phase: "drilldown", parent: cmd, items: cmd.subcommands, loading: false, query: "", selectedIndex: 0, surface: state.surface },
@@ -118,6 +124,12 @@ function transitionDrilldown(state: Extract<CommandState, { phase: "drilldown" }
   if (event.type === "select-item") {
     const itemName = typeof event.item === "string" ? event.item : event.item.label
     const itemValue = typeof event.item === "string" ? event.item : event.item.value
+    if (state.parent.kind === "config" && state.parent.configId) {
+      return { state: idle(), effect: { type: "set-config-option", configId: state.parent.configId, value: itemValue } }
+    }
+    if (state.parent.name === "Skills") {
+      return { state: idle(), effect: { type: "execute", command: itemValue } }
+    }
     const hint = state.parent.subcommandHints?.[itemName]
     if (hint) {
       return {

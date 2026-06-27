@@ -34,7 +34,7 @@ function createCapturingStdin() {
 
 function createMockCommandRegistry(): CommandRegistry {
   const registry = new CommandRegistry()
-  registry.setAcpCommands([
+    registry.setAcpCommands([
     {
       name: "/model",
       description: "Switch mock model",
@@ -60,6 +60,17 @@ function createMockCommandRegistry(): CommandRegistry {
       const n = i + 1
       return { name: `/mock-${n}`, description: `Mock command ${n}`, source: "acp" as const }
     }),
+    { name: "/pr-review", description: "Review pull request", source: "acp", kind: "skill" },
+  ])
+  registry.setConfigCommands([
+    {
+      name: "Models",
+      description: "Select session model",
+      source: "local",
+      kind: "config",
+      configId: "model",
+      options: [{ label: "sonnet", value: "anthropic/claude-sonnet" }],
+    },
   ])
   registry.addLocalCommand({ name: "Quit", description: "Exit AgentClientTUI", source: "local" })
   return registry
@@ -631,6 +642,31 @@ describe("OpenTUI command e2e", () => {
       const frame = testRenderer.captureCharFrame()
       expect(frame).toContain("/model")
       expect(frame).toContain("Switch mock model")
+      expect(frame).toContain("/Skills")
+      expect(frame).not.toContain("/pr-review")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("slash skills child menu contains skill commands", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      await testRenderer.flush()
+      await testRenderer.mockInput.typeText("skills")
+      await testRenderer.flush()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("/pr-review")
+      expect(frame).toContain("Review pull request")
     } finally {
       ui.destroy()
     }
@@ -676,8 +712,8 @@ describe("OpenTUI command e2e", () => {
       }
 
       const frame = testRenderer.captureCharFrame()
-      expect(frame).toContain("/mock-12")
-      expect(frame).toContain("Mock command 12")
+      expect(frame).toContain("/mock-11")
+      expect(frame).toContain("Mock command 11")
       expect(frame).not.toContain("/model - Switch mock model")
     } finally {
       ui.destroy()
@@ -725,7 +761,27 @@ describe("OpenTUI command e2e", () => {
       let frame = testRenderer.captureCharFrame()
       expect(frame).toContain("/model")
       expect(frame).toContain("/context")
+      expect(frame).toContain("Models")
+      expect(frame).toContain("Skills")
+      expect(frame).not.toContain("/Skills")
+      expect(frame).not.toContain("/pr-review")
 
+      await testRenderer.mockInput.typeText("skills")
+      await testRenderer.flush()
+
+      frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("Skills")
+
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("/pr-review")
+
+      testRenderer.mockInput.pressEscape()
+      await testRenderer.flush()
+      testRenderer.mockInput.pressKey("p", { ctrl: true })
+      await testRenderer.flush()
       await testRenderer.mockInput.typeText("Quit")
       await testRenderer.flush()
 

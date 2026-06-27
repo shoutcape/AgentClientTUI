@@ -14,6 +14,7 @@ const clear: CommandDescriptor = {
   name: "/clear",
   description: "Clear history",
   source: "acp",
+  kind: "server",
 }
 
 const context: CommandDescriptor = {
@@ -23,6 +24,25 @@ const context: CommandDescriptor = {
   inputType: "panel",
   subcommands: ["show", "add", "remove", "clear"],
   subcommandHints: { add: "<path>" },
+}
+
+const skills: CommandDescriptor = {
+  name: "Skills",
+  description: "Browse skill slash commands",
+  source: "local",
+  kind: "app",
+  subcommands: ["/pr-review"],
+}
+
+const models: CommandDescriptor = {
+  name: "Models",
+  description: "Select session model",
+  source: "local",
+  kind: "config",
+  configId: "model",
+  options: [
+    { label: "sonnet", value: "anthropic/claude-sonnet", description: "Balanced" },
+  ],
 }
 
 describe("Command State Machine", () => {
@@ -75,6 +95,50 @@ describe("Command State Machine", () => {
       expect(result.state.items).toEqual(["show", "add", "remove", "clear"])
       expect(result.state.loading).toBe(false)
     }
+  })
+
+  test("select Skills enters drilldown with skill command items", () => {
+    const listing: CommandState = { phase: "listing", query: "", surface: "dropdown", selectedIndex: 0 }
+    const result = transition(listing, { type: "select", command: skills })
+
+    expect(result.state.phase).toBe("drilldown")
+    if (result.state.phase === "drilldown") {
+      expect(result.state.items).toEqual(["/pr-review"])
+    }
+  })
+
+  test("select skill from Skills executes the skill command only", () => {
+    const drilldown: CommandState = {
+      phase: "drilldown", parent: skills, items: ["/pr-review"], loading: false,
+      query: "", selectedIndex: 0, surface: "dropdown",
+    }
+
+    const result = transition(drilldown, { type: "select-item", item: "/pr-review" })
+
+    expect(result.state.phase).toBe("idle")
+    expect(result.effect).toEqual({ type: "execute", command: "/pr-review" })
+  })
+
+  test("select config command enters drilldown with configured options", () => {
+    const listing: CommandState = { phase: "listing", query: "", surface: "palette", selectedIndex: 0 }
+    const result = transition(listing, { type: "select", command: models })
+
+    expect(result.state.phase).toBe("drilldown")
+    if (result.state.phase === "drilldown") {
+      expect(result.state.items).toEqual([{ label: "sonnet", value: "anthropic/claude-sonnet", description: "Balanced" }])
+    }
+  })
+
+  test("select config option emits set-config-option effect", () => {
+    const drilldown: CommandState = {
+      phase: "drilldown", parent: models, items: [{ label: "sonnet", value: "anthropic/claude-sonnet" }], loading: false,
+      query: "", selectedIndex: 0, surface: "palette",
+    }
+
+    const result = transition(drilldown, { type: "select-item", item: { label: "sonnet", value: "anthropic/claude-sonnet" } })
+
+    expect(result.state.phase).toBe("idle")
+    expect(result.effect).toEqual({ type: "set-config-option", configId: "model", value: "anthropic/claude-sonnet" })
   })
 
   test("options-loaded populates drilldown items", () => {

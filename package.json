@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@opentui/core": "latest"
+    "@opentui/core": "latest",
+    "fuse.js": "^7.4.2"
   },
   "devDependencies": {
     "@types/bun": "^1.3.14",

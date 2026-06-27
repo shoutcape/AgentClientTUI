@@ -15,6 +15,7 @@ import {
   type Renderable,
 } from "@opentui/core"
 import { CommandRegistry } from "./commands/registry"
+import { configCommandsFromOptions, type SessionConfigOption } from "./commands/acp"
 import { transition, idle, type CommandItem, type CommandOption, type CommandState, type CommandEvent } from "./commands/state"
 import { buildDropdown } from "./ui/dropdown"
 import { filetype } from "./ui/filetype"
@@ -44,6 +45,7 @@ export type UiOptions = {
   agentLabel?: string
   registry?: CommandRegistry
   onFetchOptions?: (method: string) => Promise<CommandOption[]>
+  onSetConfigOption?: (configId: string, value: string) => Promise<SessionConfigOption[]>
   renderer?: Awaited<ReturnType<typeof createCliRenderer>>
   diagnostics?: RenderDiagnostics
 }
@@ -109,6 +111,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   const registry = options.registry ?? new CommandRegistry()
   const fetchOptions = options.onFetchOptions
   const diagnostics = options.diagnostics
+  const setConfigOption = options.onSetConfigOption
   let panelOverlay: { title: string; content: string } | null = null
   let sidebarMode: SidebarMode = "auto"
   let pendingExit = false
@@ -185,10 +188,18 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     return typeof item === "string" ? "" : item.description ?? ""
   }
 
+  function getCommandDisplayName(name: string): string {
+    if (commandState.phase !== "listing") return name
+    if (commandState.surface === "dropdown") return name.startsWith("/") ? name : `/${name}`
+    return name
+  }
+
   function getCommandItems(): Array<{ name: string; description: string }> {
     if (commandState.phase === "listing") {
-      const source = commandState.surface === "dropdown" ? "acp" as const : undefined
-      return registry.search(commandState.query, source ? { source } : undefined).map((c) => ({ name: c.name, description: c.description }))
+      const commands = commandState.surface === "dropdown"
+        ? registry.searchSlash(commandState.query)
+        : registry.searchPalette(commandState.query)
+      return commands.map((c) => ({ name: getCommandDisplayName(c.name), description: c.description }))
     }
     if (commandState.phase === "drilldown") {
       const q = commandState.query.toLowerCase()
@@ -210,10 +221,9 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     if (key.name === "backspace") return { type: "backspace" }
     if (key.name === "return") {
       if (commandState.phase === "listing") {
-        const items = registry.search(
-          commandState.query,
-          commandState.surface === "dropdown" ? { source: "acp" } : undefined,
-        )
+        const items = commandState.surface === "dropdown"
+          ? registry.searchSlash(commandState.query)
+          : registry.searchPalette(commandState.query)
         const selected = items[commandState.selectedIndex]
         if (selected) return { type: "select", command: selected }
       } else if (commandState.phase === "drilldown" && !commandState.loading) {
@@ -807,6 +817,21 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
               transcript = appendTranscriptEntry(transcript, { kind: "error", text: `Failed to fetch options: ${(error as Error).message}` })
               transcriptContentVersion += 1
               commandState = idle()
+              render()
+            }
+          })()
+        } else if (result.effect?.type === "set-config-option" && setConfigOption) {
+          const { configId, value } = result.effect
+          void (async () => {
+            try {
+              const configOptions = await setConfigOption(configId, value)
+              registry.setConfigCommands(configCommandsFromOptions(configOptions))
+              transcript = appendTranscriptEntry(transcript, { kind: "status", text: `set ${configId} to ${value}` })
+              transcriptContentVersion += 1
+              render()
+            } catch (error) {
+              transcript = appendTranscriptEntry(transcript, { kind: "error", text: `Failed to set ${configId}: ${(error as Error).message}` })
+              transcriptContentVersion += 1
               render()
             }
           })()
