@@ -617,6 +617,46 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("page keys scroll transcript by a partial viewport", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 18 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      for (let i = 1; i <= 80; i += 1) {
+        ui.append({ kind: "agent", text: `transcript line ${i}` })
+      }
+      await testRenderer.flush()
+
+      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      expect(transcriptScroll).toBeDefined()
+
+      transcriptScroll?.scrollTo(0)
+      transcriptScroll?.focus()
+      await testRenderer.flush()
+
+      const initialScrollTop = transcriptScroll?.scrollTop ?? 0
+      const visibleHeight = transcriptScroll?.height ?? 0
+
+      testRenderer.mockInput.pressKey("\x1b[6~")
+      await testRenderer.flush()
+
+      const afterPageDown = transcriptScroll?.scrollTop ?? 0
+      expect(afterPageDown).toBeGreaterThan(initialScrollTop)
+      expect(afterPageDown - initialScrollTop).toBeLessThan(visibleHeight)
+
+      testRenderer.mockInput.pressKey("\x1b[5~")
+      await testRenderer.flush()
+
+      const afterPageUp = transcriptScroll?.scrollTop ?? 0
+      expect(afterPageUp).toBeLessThan(afterPageDown)
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("slash opens dropdown with mock ACP commands", async () => {
     const testRenderer = await createTestRenderer({ width: 100, height: 30 })
     const ui = await createAgentClientUi({
