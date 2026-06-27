@@ -319,6 +319,29 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("updateLast updates the active agent row in place", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      ui.append({ kind: "agent", text: "stream-old-token" })
+      await testRenderer.flush()
+
+      ui.updateLast("stream-final-token")
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("stream-final-token")
+      expect(frame).not.toContain("stream-old-token")
+      expect(frame.match(/◆ assistant/g)?.length ?? 0).toBe(1)
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("records transcript context when transcript add throws", async () => {
     const testRenderer = await createTestRenderer({ width: 100, height: 30 })
     const records: unknown[] = []

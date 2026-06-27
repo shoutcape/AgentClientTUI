@@ -63,7 +63,6 @@ function redactArgv(argv: string[]): string[] {
     return arg
   })
 }
-
 const { agent, headless } = parseArgs(process.argv.slice(2))
 const diagnostics = createRenderDiagnostics({ agentLabel: agent.label })
 diagnostics.recordEvent("startup", {
