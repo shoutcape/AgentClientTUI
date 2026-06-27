@@ -1,14 +1,7 @@
 import type { JsonObject, JsonValue } from "./types"
+import { requireJsonObject } from "./json"
 import { JsonRpcTransport } from "./transport"
 import type { SessionConfigOption } from "../commands/acp"
-
-function asObject(value: JsonValue, label: string): JsonObject {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} response was not an object`)
-  }
-
-  return value
-}
 
 function asString(value: JsonValue | undefined, label: string): string {
   if (typeof value !== "string") {
@@ -22,7 +15,7 @@ export class AcpClient {
   constructor(private readonly transport: JsonRpcTransport) {}
 
   async initialize(): Promise<JsonObject> {
-    return asObject(await this.transport.request("initialize", {
+    return requireJsonObject(await this.transport.request("initialize", {
       protocolVersion: 1,
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
@@ -33,7 +26,7 @@ export class AcpClient {
   }
 
   async newSession(cwd: string): Promise<{ sessionId: string; configOptions: SessionConfigOption[] }> {
-    const result = asObject(await this.transport.request("session/new", {
+    const result = requireJsonObject(await this.transport.request("session/new", {
       cwd,
       mcpServers: [],
     }), "session/new")
@@ -45,7 +38,7 @@ export class AcpClient {
   }
 
   async prompt(sessionId: string, text: string): Promise<JsonObject> {
-    return asObject(await this.transport.request("session/prompt", {
+    return requireJsonObject(await this.transport.request("session/prompt", {
       sessionId,
       prompt: [{ type: "text", text }],
     }), "session/prompt")
@@ -56,7 +49,7 @@ export class AcpClient {
   }
 
   async setConfigOption(sessionId: string, configId: string, value: string): Promise<SessionConfigOption[]> {
-    const result = asObject(await this.transport.request("session/set_config_option", {
+    const result = requireJsonObject(await this.transport.request("session/set_config_option", {
       sessionId,
       configId,
       value,

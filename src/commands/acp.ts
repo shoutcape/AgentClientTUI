@@ -1,3 +1,4 @@
+import { isRecord, recordOrNull } from "../acp/json"
 import type { CommandDescriptor, CommandKind } from "./registry"
 
 type RawCommand = {
@@ -43,14 +44,14 @@ const configLabels: Record<string, { name: string; description: string }> = {
 }
 
 export function commandsFromStandardUpdate(params: unknown): CommandDescriptor[] | null {
-  const record = objectRecord(params)
-  const update = objectRecord(record?.update)
+  const record = recordOrNull(params)
+  const update = recordOrNull(record?.update)
   if (update?.sessionUpdate !== "available_commands_update" || !Array.isArray(update.availableCommands)) return null
   return update.availableCommands.flatMap((command) => mapCommand(command, "standard"))
 }
 
 export function commandsFromKiroAvailable(params: unknown): CommandDescriptor[] {
-  const record = objectRecord(params)
+  const record = recordOrNull(params)
   if (!Array.isArray(record?.commands)) return []
   return record.commands.flatMap((command) => mapCommand(command, "kiro"))
 }
@@ -58,7 +59,7 @@ export function commandsFromKiroAvailable(params: unknown): CommandDescriptor[] 
 export function configCommandsFromOptions(options: unknown): CommandDescriptor[] {
   if (!Array.isArray(options)) return []
   return options.flatMap((option) => {
-    const record = objectRecord(option) as SessionConfigOption | null
+    const record = recordOrNull(option) as SessionConfigOption | null
     if (!record || typeof record.id !== "string" || record.type !== "select" || !Array.isArray(record.options)) return []
     const label = configLabels[record.id]
     if (!label) return []
@@ -84,11 +85,11 @@ export function configCommandsFromOptions(options: unknown): CommandDescriptor[]
 }
 
 function mapCommand(command: unknown, vendor: "standard" | "kiro"): CommandDescriptor[] {
-  const record = objectRecord(command) as RawCommand | null
+  const record = recordOrNull(command) as RawCommand | null
   if (!record || typeof record.name !== "string") return []
   const displayName = record.name.startsWith("/") ? record.name : `/${record.name}`
   const rawName = record.name
-  const meta = objectRecord(record.meta)
+  const meta = recordOrNull(record.meta)
   const kind = commandKind(rawName, record, meta)
 
   return [{
@@ -115,10 +116,6 @@ function commandKind(name: string, record: RawCommand, meta: Record<string, unkn
   return "skill"
 }
 
-function objectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null
-}
-
 function isStringRecord(value: unknown): value is Record<string, string> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.values(value).every((item) => typeof item === "string"))
+  return isRecord(value) && Object.values(value).every((item) => typeof item === "string")
 }

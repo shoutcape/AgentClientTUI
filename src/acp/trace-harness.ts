@@ -3,6 +3,7 @@ import { appendFile, mkdir } from "node:fs/promises"
 import { dirname } from "node:path"
 import { createInterface } from "node:readline"
 import type { AgentCommand, JsonRpcId, JsonValue } from "./types"
+import { isRecord, requireJsonObject } from "./json"
 
 export type TraceDirection = "client_to_agent" | "agent_to_client" | "agent_stderr" | "process_event" | "harness_event"
 
@@ -46,10 +47,6 @@ export function defaultTraceOutFile(agentLabel: string, scenario: TraceScenario,
   return `tmp/acp-traces/${slug(agentLabel)}/${timestamp}-${scenario}.jsonl`
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-}
-
 export function redactedTraceValue(value: unknown, home = process.env.HOME): any {
   if (typeof value === "string") {
     return home ? value.replaceAll(home, "$HOME") : value
@@ -57,7 +54,7 @@ export function redactedTraceValue(value: unknown, home = process.env.HOME): any
 
   if (Array.isArray(value)) return value.map((item) => redactedTraceValue(item, home))
 
-  if (isObject(value)) {
+  if (isRecord(value)) {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [
       key,
       SENSITIVE_KEY_PATTERN.test(key) ? "[REDACTED]" : redactedTraceValue(item, home),
@@ -70,13 +67,6 @@ export function redactedTraceValue(value: unknown, home = process.env.HOME): any
 export async function writeTraceEvent(outFile: string, event: TraceEvent): Promise<void> {
   await mkdir(dirname(outFile), { recursive: true })
   await appendFile(outFile, `${JSON.stringify(redactedTraceValue(event))}\n`)
-}
-
-function asObject(value: JsonValue | undefined, label: string): TraceMessage {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} response was not an object`)
-  }
-  return value as TraceMessage
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -157,7 +147,7 @@ class TraceConnection {
       if (!pending) return
       this.pending.delete(message.id)
       if (message.error) {
-        const error = isObject(message.error) && typeof message.error.message === "string"
+        const error = isRecord(message.error) && typeof message.error.message === "string"
           ? new Error(message.error.message)
           : new Error("Agent returned JSON-RPC error")
         pending.reject(error)
@@ -192,7 +182,7 @@ async function runTraceScenarioInner(options: RunTraceScenarioOptions): Promise<
       clientCapabilities: {},
       clientInfo: { name: "AgentClientTUI", version: "0.1.0" },
     })
-    const initializeResult = asObject(initialize.result as JsonValue | undefined, "initialize")
+    const initializeResult = requireJsonObject(initialize.result as JsonValue | undefined, "initialize")
 
     if (options.scenario === "initialize") {
       return {
@@ -207,7 +197,7 @@ async function runTraceScenarioInner(options: RunTraceScenarioOptions): Promise<
 
     if (options.scenario === "list") {
       const list = await connection.request("session/list", options.cwd ? { cwd: options.cwd } : {})
-      const result = asObject(list.result as JsonValue | undefined, "session/list")
+      const result = requireJsonObject(list.result as JsonValue | undefined, "session/list")
       const sessions = Array.isArray(result.sessions) ? result.sessions : []
       return {
         events: connection.events,
@@ -223,7 +213,7 @@ async function runTraceScenarioInner(options: RunTraceScenarioOptions): Promise<
       cwd: options.cwd ?? process.cwd(),
       mcpServers: [],
     })
-    const session = asObject(newSession.result as JsonValue | undefined, "session/new")
+    const session = requireJsonObject(newSession.result as JsonValue | undefined, "session/new")
     const sessionId = typeof session.sessionId === "string" ? session.sessionId : undefined
     if (!sessionId) throw new Error("session/new response did not include sessionId")
 
@@ -231,7 +221,7 @@ async function runTraceScenarioInner(options: RunTraceScenarioOptions): Promise<
       sessionId,
       prompt: [{ type: "text", text: options.prompt ?? "Say hello from AgentClientTUI trace." }],
     })
-    const promptResult = asObject(prompt.result as JsonValue | undefined, "session/prompt")
+    const promptResult = requireJsonObject(prompt.result as JsonValue | undefined, "session/prompt")
 
     return {
       events: connection.events,
