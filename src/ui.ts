@@ -37,6 +37,7 @@ import {
 } from "./ui/transcript"
 
 const SIDEBAR_AUTO_HIDE_WIDTH = 90
+const TRANSCRIPT_PAGE_SCROLL_FRACTION = 0.5
 
 type SidebarMode = "auto" | "forced-visible" | "forced-hidden"
 
@@ -514,11 +515,13 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     const action = routeTranscriptScrollAction(key.name, { panelOpen: panelOverlay !== null })
 
     if (action === "page-up") {
-      transcriptScroll.scrollBy(-1, "viewport")
+      const distance = Math.max(1, Math.floor(transcriptScroll.height * TRANSCRIPT_PAGE_SCROLL_FRACTION))
+      transcriptScroll.scrollBy(-distance)
       return true
     }
     if (action === "page-down") {
-      transcriptScroll.scrollBy(1, "viewport")
+      const distance = Math.max(1, Math.floor(transcriptScroll.height * TRANSCRIPT_PAGE_SCROLL_FRACTION))
+      transcriptScroll.scrollBy(distance)
       return true
     }
     if (action === "top") {
