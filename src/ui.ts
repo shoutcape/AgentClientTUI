@@ -34,6 +34,10 @@ import {
   type TranscriptNode,
 } from "./ui/transcript"
 
+const SIDEBAR_AUTO_HIDE_WIDTH = 90
+
+type SidebarMode = "auto" | "forced-visible" | "forced-hidden"
+
 export type UiOptions = {
   headless?: boolean
   agentLabel?: string
@@ -103,7 +107,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   const registry = options.registry ?? new CommandRegistry()
   const fetchOptions = options.onFetchOptions
   let panelOverlay: { title: string; content: string } | null = null
-  let sidebarVisible = true
+  let sidebarMode: SidebarMode = "auto"
   let pendingExit = false
   let transcriptScroll: ScrollBoxRenderable | undefined
   let transcriptContentVersion = 0
@@ -168,6 +172,16 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       return { type: "char", char: key.sequence }
     }
     return null
+  }
+
+  function isNarrowSidebarWidth(): boolean {
+    return renderer.width < SIDEBAR_AUTO_HIDE_WIDTH
+  }
+
+  function isSidebarVisible(): boolean {
+    if (sidebarMode === "forced-visible") return true
+    if (sidebarMode === "forced-hidden") return false
+    return !isNarrowSidebarWidth()
   }
 
   function buildTranscriptLabel(node: TranscriptNode, index: number, label: string, color: string, text: string, wrapMode: "word" | "none" = "word"): Renderable {
@@ -401,7 +415,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       }
       syncTranscript()
 
-      const sidebar = sidebarVisible
+      const sidebar = isSidebarVisible()
         ? Box(
             {
               flexDirection: "column",
@@ -547,6 +561,13 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   renderer.on("blur", () => {
     windowActive = false
     cursorVisible = false
+    render()
+  })
+
+  renderer.on("resize", () => {
+    if (!isNarrowSidebarWidth()) {
+      sidebarMode = "auto"
+    }
     render()
   })
 
@@ -710,7 +731,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       render()
     },
     toggleSidebar() {
-      sidebarVisible = !sidebarVisible
+      sidebarMode = isSidebarVisible() ? "forced-hidden" : "forced-visible"
       render()
     },
     destroy() {
