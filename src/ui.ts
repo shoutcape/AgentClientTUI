@@ -20,6 +20,7 @@ import { buildDropdown } from "./ui/dropdown"
 import { filetype } from "./ui/filetype"
 import { buildPalette } from "./ui/palette"
 import { buildPanelOverlay } from "./ui/panel-overlay"
+import { summarizeText, type RenderContext, type RenderDiagnostics } from "./ui/render-diagnostics"
 import { getSyntaxStyle } from "./ui/syntax"
 import { buildInputBar, buildTranscriptRows, handleInputKey, opencodeTheme, type TranscriptEntry } from "./ui/view"
 import {
@@ -44,6 +45,7 @@ export type UiOptions = {
   registry?: CommandRegistry
   onFetchOptions?: (method: string) => Promise<CommandOption[]>
   renderer?: Awaited<ReturnType<typeof createCliRenderer>>
+  diagnostics?: RenderDiagnostics
 }
 
 export type AgentClientUi = {
@@ -106,6 +108,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   let commandState: CommandState = idle()
   const registry = options.registry ?? new CommandRegistry()
   const fetchOptions = options.onFetchOptions
+  const diagnostics = options.diagnostics
   let panelOverlay: { title: string; content: string } | null = null
   let sidebarMode: SidebarMode = "auto"
   let pendingExit = false
@@ -116,6 +119,63 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   let activeStreamRenderable: TextRenderable | null = null
   let activeStreamNodeId: string | null = null
   let renderScheduled = false
+  let currentRenderContext: RenderContext | undefined
+
+  function setRenderContext(context: RenderContext): void {
+    currentRenderContext = context
+  }
+
+  function clearRenderContext(): void {
+    currentRenderContext = undefined
+  }
+
+  function buildWithRenderContext<T>(context: RenderContext, build: () => T): T {
+    const previousContext = currentRenderContext
+    setRenderContext(context)
+    try {
+      const renderable = build()
+      currentRenderContext = previousContext
+      return renderable
+    } catch (error) {
+      throw error
+    }
+  }
+
+  function recordRenderError(err: unknown): void {
+    try {
+      void diagnostics?.recordRenderError(err, renderErrorSnapshot()).catch((logError) => {
+        process.stderr.write(`[render diagnostics error] ${(logError as Error).message}\n`)
+      })
+    } catch (logError) {
+      process.stderr.write(`[render diagnostics error] ${(logError as Error).message}\n`)
+    }
+  }
+
+  function resetTranscriptRenderCache(): void {
+    transcriptScroll?.destroyRecursively()
+    transcriptScroll = undefined
+    renderedTranscriptVersion = -1
+    renderedNodeCount = 0
+    activeStreamRenderable = null
+    activeStreamNodeId = null
+  }
+
+  function renderErrorSnapshot() {
+    return {
+      status,
+      terminal: {
+        columns: process.stdout.columns,
+        rows: process.stdout.rows,
+      },
+      transcript: {
+        version: transcriptContentVersion,
+        renderedNodeCount,
+        nodeCount: transcript.nodes.length,
+        ...(transcript.activeAgentNodeId ? { activeAgentNodeId: transcript.activeAgentNodeId } : {}),
+      },
+      ...(currentRenderContext ? { context: currentRenderContext } : {}),
+    }
+  }
 
   function getItemLabel(item: CommandItem): string {
     return typeof item === "string" ? item : item.label
@@ -191,21 +251,39 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       width: "100%",
       gap: 1,
     })
-    row.add(new TextRenderable(renderer, {
-      id: `transcript-${node.id}-row-${index}-label`,
-      content: label.padEnd(12),
-      fg: color,
-      width: 13,
-      wrapMode: "none",
-      selectable: false,
-    }))
-    row.add(new TextRenderable(renderer, {
-      id: `transcript-${node.id}-row-${index}-body`,
-      content: text,
-      fg: color,
-      width: "100%",
-      wrapMode,
-    }))
+    buildWithRenderContext({
+      phase: "buildTranscriptLabel.label",
+      nodeId: node.id,
+      kind: node.kind,
+      blockIndex: index,
+      renderable: "TextRenderable",
+      text: summarizeText(label),
+    }, () => {
+      row.add(new TextRenderable(renderer, {
+        id: `transcript-${node.id}-row-${index}-label`,
+        content: label.padEnd(12),
+        fg: color,
+        width: 13,
+        wrapMode: "none",
+        selectable: false,
+      }))
+    })
+    buildWithRenderContext({
+      phase: "buildTranscriptLabel.body",
+      nodeId: node.id,
+      kind: node.kind,
+      blockIndex: index,
+      renderable: "TextRenderable",
+      text: summarizeText(text),
+    }, () => {
+      row.add(new TextRenderable(renderer, {
+        id: `transcript-${node.id}-row-${index}-body`,
+        content: text,
+        fg: color,
+        width: "100%",
+        wrapMode,
+      }))
+    })
     return row
   }
 
@@ -230,17 +308,38 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         flexDirection: "column",
         width: "100%",
       })
-      group.add(buildTranscriptLabel(node, blockIndex, label, color, block.language ? `code ${block.language}` : "code", "none"))
-      group.add(new CodeRenderable(renderer, {
-        id: `transcript-${node.id}-code-${block.id ?? blockIndex}`,
-        content: block.text,
-        filetype: filetype(block.language),
-        syntaxStyle: getSyntaxStyle(),
-        fg: opencodeTranscriptTheme.text,
-        width: "100%",
-        wrapMode: "none",
-        conceal: false,
-      }))
+      buildWithRenderContext({
+        phase: "buildTranscriptBlock.addLabel",
+        nodeId: node.id,
+        kind: node.kind,
+        ...(block.id ? { blockId: block.id } : {}),
+        blockType: block.type,
+        blockIndex,
+        renderable: "BoxRenderable",
+      }, () => {
+        group.add(buildTranscriptLabel(node, blockIndex, label, color, block.language ? `code ${block.language}` : "code", "none"))
+      })
+      buildWithRenderContext({
+        phase: "buildTranscriptBlock.code",
+        nodeId: node.id,
+        kind: node.kind,
+        ...(block.id ? { blockId: block.id } : {}),
+        blockType: block.type,
+        blockIndex,
+        renderable: "CodeRenderable",
+        text: summarizeText(block.text),
+      }, () => {
+        group.add(new CodeRenderable(renderer, {
+          id: `transcript-${node.id}-code-${block.id ?? blockIndex}`,
+          content: block.text,
+          filetype: filetype(block.language),
+          syntaxStyle: getSyntaxStyle(),
+          fg: opencodeTranscriptTheme.text,
+          width: "100%",
+          wrapMode: "none",
+          conceal: false,
+        }))
+      })
       return group
     }
 
@@ -250,27 +349,49 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         flexDirection: "column",
         width: "100%",
       })
-      group.add(buildTranscriptLabel(node, blockIndex, label, color, block.path ? `diff ${block.path}` : "diff", "none"))
-      group.add(new DiffRenderable(renderer, {
-        id: `transcript-${node.id}-diff-${block.id ?? blockIndex}`,
-        diff: buildUnifiedDiff(block),
-        filetype: filetype(block.path),
-        syntaxStyle: getSyntaxStyle(),
-        view: "unified",
-        showLineNumbers: true,
-        width: "100%",
-        wrapMode: "none",
-        fg: opencodeTranscriptTheme.text,
-        addedBg: "#14331c",
-        removedBg: "#3a1518",
-        contextBg: opencodeTranscriptTheme.backgroundPanel,
-        addedSignColor: opencodeTranscriptTheme.success,
-        removedSignColor: opencodeTranscriptTheme.error,
-        lineNumberFg: opencodeTranscriptTheme.textMuted,
-        lineNumberBg: opencodeTranscriptTheme.backgroundPanel,
-        addedLineNumberBg: "#14331c",
-        removedLineNumberBg: "#3a1518",
-      }))
+      buildWithRenderContext({
+        phase: "buildTranscriptBlock.addLabel",
+        nodeId: node.id,
+        kind: node.kind,
+        ...(block.id ? { blockId: block.id } : {}),
+        blockType: block.type,
+        blockIndex,
+        renderable: "BoxRenderable",
+      }, () => {
+        group.add(buildTranscriptLabel(node, blockIndex, label, color, block.path ? `diff ${block.path}` : "diff", "none"))
+      })
+      const diff = buildUnifiedDiff(block)
+      buildWithRenderContext({
+        phase: "buildTranscriptBlock.diff",
+        nodeId: node.id,
+        kind: node.kind,
+        ...(block.id ? { blockId: block.id } : {}),
+        blockType: block.type,
+        blockIndex,
+        renderable: "DiffRenderable",
+        text: summarizeText(diff),
+      }, () => {
+        group.add(new DiffRenderable(renderer, {
+          id: `transcript-${node.id}-diff-${block.id ?? blockIndex}`,
+          diff,
+          filetype: filetype(block.path),
+          syntaxStyle: getSyntaxStyle(),
+          view: "unified",
+          showLineNumbers: true,
+          width: "100%",
+          wrapMode: "none",
+          fg: opencodeTranscriptTheme.text,
+          addedBg: "#14331c",
+          removedBg: "#3a1518",
+          contextBg: opencodeTranscriptTheme.backgroundPanel,
+          addedSignColor: opencodeTranscriptTheme.success,
+          removedSignColor: opencodeTranscriptTheme.error,
+          lineNumberFg: opencodeTranscriptTheme.textMuted,
+          lineNumberBg: opencodeTranscriptTheme.backgroundPanel,
+          addedLineNumberBg: "#14331c",
+          removedLineNumberBg: "#3a1518",
+        }))
+      })
       return group
     }
 
@@ -279,7 +400,12 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
 
   function buildTranscriptMessage(node: TranscriptNode): Renderable {
     const { label, color } = getTranscriptLabel(node.kind)
-    const nodeBox = new BoxRenderable(renderer, {
+    const nodeBox = buildWithRenderContext({
+      phase: "buildTranscriptMessage.node",
+      nodeId: node.id,
+      kind: node.kind,
+      renderable: "BoxRenderable",
+    }, () => new BoxRenderable(renderer, {
       id: `transcript-${node.id}`,
       flexDirection: "column",
       width: "100%",
@@ -288,9 +414,20 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       ...(node.kind === "tool"
         ? { backgroundColor: "#101010", padding: 1 }
         : {}),
-    })
+    }))
 
-    node.blocks.forEach((block, index) => nodeBox.add(buildTranscriptBlock(node, block, index, label, color)))
+    node.blocks.forEach((block, index) => {
+      buildWithRenderContext({
+        phase: "buildTranscriptMessage.addBlock",
+        nodeId: node.id,
+        kind: node.kind,
+        blockType: block.type,
+        blockIndex: index,
+        renderable: "BoxRenderable",
+      }, () => {
+        nodeBox.add(buildTranscriptBlock(node, block, index, label, color))
+      })
+    })
 
     return nodeBox
   }
@@ -303,7 +440,19 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     if (activeStreamNodeId && transcript.activeAgentNodeId === activeStreamNodeId && activeStreamRenderable) {
       const node = transcript.nodes.find((n) => n.id === activeStreamNodeId)
       if (node && node.blocks[0]?.type === "text") {
-        activeStreamRenderable.content = node.blocks[0].text
+        const streamRenderable = activeStreamRenderable
+        const textBlock = node.blocks[0]
+        buildWithRenderContext({
+          phase: "syncTranscript.activeStream",
+          nodeId: node.id,
+          kind: node.kind,
+          blockType: textBlock.type,
+          blockIndex: 0,
+          renderable: "TextRenderable",
+          text: summarizeText(textBlock.text),
+        }, () => {
+          streamRenderable.content = textBlock.text
+        })
         renderedTranscriptVersion = transcriptContentVersion
         return
       }
@@ -315,7 +464,15 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       const node = nodes[i]
       if (!node) continue
       const msg = buildTranscriptMessage(node)
-      transcriptScroll.add(msg)
+      const scroll = transcriptScroll
+      buildWithRenderContext({
+        phase: "syncTranscript.addNode",
+        nodeId: node.id,
+        kind: node.kind,
+        renderable: "BoxRenderable",
+      }, () => {
+        scroll.add(msg)
+      })
 
       // Track the active streaming node's text renderable
       if (node.id === transcript.activeAgentNodeId && node.kind === "agent") {
@@ -379,8 +536,10 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
 
   function render(): void {
     try {
-      if (renderer.root.getRenderable("app-root")) {
-        renderer.root.remove("app-root")
+      const existingRoot = renderer.root.getRenderable("app-root")
+      if (existingRoot) {
+        transcriptScroll?.parent?.remove(transcriptScroll.id)
+        existingRoot.destroyRecursively()
       }
 
     const inputBar = buildInputBar(inputValue, { cursorVisible: windowActive && cursorVisible })
@@ -398,7 +557,10 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       }
 
       if (!transcriptScroll) {
-        transcriptScroll = new ScrollBoxRenderable(renderer, {
+        transcriptScroll = buildWithRenderContext({
+          phase: "render.transcriptScroll",
+          renderable: "ScrollBoxRenderable",
+        }, () => new ScrollBoxRenderable(renderer, {
           id: "transcript-scroll",
           flexGrow: 1,
           width: "100%",
@@ -410,7 +572,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
           verticalScrollbarOptions: {
             showArrows: false,
           },
-        })
+        }))
         transcriptScroll.focusable = false
       }
       syncTranscript()
@@ -507,40 +669,49 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         : null,
     )
 
-    renderer.root.add(
-      Box(
-        {
-          id: "app-root",
-          flexDirection: "column",
-          width: "100%",
-          height: "100%",
-          backgroundColor: opencodeTheme.background,
-          padding: 1,
-          gap: 1,
-        },
-        Box(
-          { flexDirection: "row", justifyContent: "space-between", width: "100%" },
-          Text({ content: t`${fg(opencodeTheme.primary)("Agent")}Client${fg(opencodeTheme.accent)("TUI")}`, attributes: TextAttributes.BOLD }),
-          Text({ content: `● ${status}`, fg: opencodeTheme.secondary }),
-        ),
-        mainContent,
-        inputStack,
+    buildWithRenderContext({
+      phase: "render.root.add",
+      renderable: "BoxRenderable",
+    }, () => {
+      renderer.root.add(
         Box(
           {
-            flexDirection: "row",
-            justifyContent: "space-between",
+            id: "app-root",
+            flexDirection: "column",
             width: "100%",
+            height: "100%",
             backgroundColor: opencodeTheme.background,
+            padding: 1,
+            gap: 1,
           },
-          Text({ content: cwdPath, fg: opencodeTheme.textMuted }),
-          Text({ content: pendingExit ? "press Ctrl+C again to exit" : "/ commands · Ctrl+P palette · Ctrl+C exit", fg: pendingExit ? opencodeTheme.warning : opencodeTheme.textMuted }),
+          Box(
+            { flexDirection: "row", justifyContent: "space-between", width: "100%" },
+            Text({ content: t`${fg(opencodeTheme.primary)("Agent")}Client${fg(opencodeTheme.accent)("TUI")}`, attributes: TextAttributes.BOLD }),
+            Text({ content: `● ${status}`, fg: opencodeTheme.secondary }),
+          ),
+          mainContent,
+          inputStack,
+          Box(
+            {
+              flexDirection: "row",
+              justifyContent: "space-between",
+              width: "100%",
+              backgroundColor: opencodeTheme.background,
+            },
+            Text({ content: cwdPath, fg: opencodeTheme.textMuted }),
+            Text({ content: pendingExit ? "press Ctrl+C again to exit" : "/ commands · Ctrl+P palette · Ctrl+C exit", fg: pendingExit ? opencodeTheme.warning : opencodeTheme.textMuted }),
+          ),
+          paletteElement,
         ),
-        paletteElement,
-      ),
-    )
+      )
+    })
+    clearRenderContext()
     } catch (err) {
       // Prevent permanent blank screen - attempt recovery on next frame
       process.stderr.write(`[render error] ${(err as Error).message}\n`)
+      recordRenderError(err)
+      resetTranscriptRenderCache()
+      clearRenderContext()
     }
   }
 
@@ -707,8 +878,28 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       transcriptContentVersion += 1
       // Fast path: update text in place without full tree rebuild
       if (activeStreamRenderable && activeStreamNodeId === transcript.activeAgentNodeId) {
-        activeStreamRenderable.content = text
-        renderedTranscriptVersion = transcriptContentVersion
+        const streamRenderable = activeStreamRenderable
+        const streamNodeId = activeStreamNodeId
+        try {
+          buildWithRenderContext({
+            phase: "updateLast.activeStream",
+            nodeId: streamNodeId,
+            kind: "agent",
+            blockType: "text",
+            blockIndex: 0,
+            renderable: "TextRenderable",
+            text: summarizeText(text),
+          }, () => {
+            streamRenderable.content = text
+          })
+          renderedTranscriptVersion = transcriptContentVersion
+        } catch (err) {
+          process.stderr.write(`[render error] ${(err as Error).message}\n`)
+          recordRenderError(err)
+          resetTranscriptRenderCache()
+          clearRenderContext()
+          scheduleRender()
+        }
       } else {
         scheduleRender()
       }
