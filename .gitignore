@@ -5,6 +5,5 @@ dist/
 
 .worktrees/
 .superpowers/
-/tmp/acp-traces/mock-agent
-/tmp/acp-traces/opencode-acp
 /TODO.md
+/tmp/

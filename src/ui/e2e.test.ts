@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Readable, Writable } from "node:stream"
-import { createCliRenderer, ScrollBoxRenderable } from "@opentui/core"
+import { BoxRenderable, createCliRenderer, ScrollBoxRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { CommandRegistry } from "../commands/registry"
 import { createAgentClientUi } from "../ui"
@@ -237,6 +237,341 @@ describe("OpenTUI command e2e", () => {
       const codeHeaderIndex = lines.findIndex((line) => line.includes("code ts"))
       const codeContentIndex = lines.findIndex((line) => line.includes("const answer = 42"))
       expect(codeContentIndex).toBe(codeHeaderIndex + 1)
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("records render diagnostics when render throws", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const records: unknown[] = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      diagnostics: {
+        logFile: "test.jsonl",
+        recordEvent() {},
+        async recordRenderError(_error, snapshot) {
+          records.push(snapshot)
+        },
+      },
+    })
+
+    const originalAdd = testRenderer.renderer.root.add
+    let shouldThrow = true
+    testRenderer.renderer.root.add = ((...args: Parameters<typeof testRenderer.renderer.root.add>) => {
+      if (shouldThrow) {
+        shouldThrow = false
+        throw new Error("Failed to create TextBuffer")
+      }
+      return originalAdd.apply(testRenderer.renderer.root, args)
+    }) as typeof testRenderer.renderer.root.add
+
+    try {
+      ui.append({ kind: "tool", blocks: [{ type: "code", language: "html", text: "<section>stress</section>" }] })
+      await testRenderer.flush()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+
+      expect(records.length).toBe(1)
+      expect(records[0]).toMatchObject({
+        status: "starting",
+        transcript: { nodeCount: 1 },
+        context: { phase: "render.root.add", renderable: "BoxRenderable" },
+      })
+    } finally {
+      testRenderer.renderer.root.add = originalAdd as typeof testRenderer.renderer.root.add
+      ui.destroy()
+    }
+  })
+
+  test("destroys replaced app roots without destroying transcript scroll", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      const firstRoot = testRenderer.renderer.root.getRenderable("app-root")
+      const firstScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      expect(firstRoot).toBeDefined()
+      expect(firstScroll).toBeDefined()
+
+      ui.setStatus("rerender")
+      await testRenderer.flush()
+
+      expect(firstRoot?.isDestroyed).toBe(true)
+      expect(firstScroll?.isDestroyed).toBe(false)
+      expect(testRenderer.renderer.root.findDescendantById("transcript-scroll")).toBe(firstScroll)
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("records transcript context when transcript add throws", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const records: unknown[] = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      diagnostics: {
+        logFile: "test.jsonl",
+        recordEvent() {},
+        async recordRenderError(_error, snapshot) {
+          records.push(snapshot)
+        },
+      },
+    })
+
+    const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+    expect(transcriptScroll).toBeDefined()
+    if (!transcriptScroll) {
+      ui.destroy()
+      return
+    }
+
+    const originalAdd = transcriptScroll.add
+    let shouldThrow = true
+    transcriptScroll.add = ((...args: Parameters<typeof transcriptScroll.add>) => {
+      if (shouldThrow) {
+        shouldThrow = false
+        throw new Error("Failed to add transcript node")
+      }
+      return originalAdd.apply(transcriptScroll, args)
+    }) as typeof transcriptScroll.add
+
+    try {
+      ui.append({ kind: "tool", blocks: [{ type: "code", language: "html", text: "<section>stress</section>" }] })
+      await testRenderer.flush()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+
+      expect(records.length).toBe(1)
+      expect(records[0]).toMatchObject({
+        transcript: { nodeCount: 1 },
+        context: { phase: "syncTranscript.addNode", kind: "tool", renderable: "BoxRenderable" },
+      })
+    } finally {
+      transcriptScroll.add = originalAdd
+      ui.destroy()
+    }
+  })
+
+  test("preserves outer context when nested transcript block add throws", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const records: unknown[] = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      diagnostics: {
+        logFile: "test.jsonl",
+        recordEvent() {},
+        async recordRenderError(_error, snapshot) {
+          records.push(snapshot)
+        },
+      },
+    })
+
+    const originalAdd = BoxRenderable.prototype.add
+    let shouldThrow = true
+    BoxRenderable.prototype.add = function patchedAdd(this: BoxRenderable, ...args: Parameters<typeof originalAdd>) {
+      const id = (this as { id?: string }).id ?? ""
+      if (shouldThrow && id.startsWith("transcript-") && !id.includes("-row-") && !id.includes("-block-")) {
+        shouldThrow = false
+        throw new Error("Failed to add transcript block")
+      }
+      return originalAdd.apply(this, args)
+    } as typeof originalAdd
+
+    try {
+      ui.append({ kind: "tool", blocks: [{ type: "code", language: "html", text: "<section>stress</section>" }] })
+      await testRenderer.flush()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+
+      expect(records.length).toBe(1)
+      expect(records[0]).toMatchObject({
+        transcript: { nodeCount: 1 },
+        context: { phase: "buildTranscriptMessage.addBlock", kind: "tool", blockType: "code", renderable: "BoxRenderable" },
+      })
+    } finally {
+      BoxRenderable.prototype.add = originalAdd
+      ui.destroy()
+    }
+  })
+
+  test("records stream update context when text mutation throws", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const records: unknown[] = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      diagnostics: {
+        logFile: "test.jsonl",
+        recordEvent() {},
+        async recordRenderError(_error, snapshot) {
+          records.push(snapshot)
+        },
+      },
+    })
+
+    try {
+      ui.append({ kind: "agent", text: "first" })
+      await testRenderer.flush()
+
+      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      const nodeBox = transcriptScroll?.getChildren()[0] as { getChildren(): unknown[] } | undefined
+      const row = nodeBox?.getChildren()[0] as { getChildren(): unknown[] } | undefined
+      const textRenderable = row?.getChildren()[1] as object | undefined
+      expect(textRenderable).toBeDefined()
+      if (!textRenderable) return
+
+      const descriptor = Object.getOwnPropertyDescriptor(textRenderable, "content")
+      Object.defineProperty(textRenderable, "content", {
+        configurable: true,
+        get() {
+          return "first"
+        },
+        set() {
+          throw new Error("Failed to update stream text")
+        },
+      })
+
+      let restored = false
+      try {
+        ui.updateLast("second")
+        if (descriptor) {
+          Object.defineProperty(textRenderable, "content", descriptor)
+        } else {
+          delete (textRenderable as { content?: unknown }).content
+        }
+        restored = true
+        await testRenderer.flush()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+
+        expect(records.length).toBe(1)
+        expect(records[0]).toMatchObject({
+          context: { phase: "updateLast.activeStream", renderable: "TextRenderable" },
+        })
+      } finally {
+        if (!restored) {
+          if (descriptor) {
+            Object.defineProperty(textRenderable, "content", descriptor)
+          } else {
+            delete (textRenderable as { content?: unknown }).content
+          }
+        }
+      }
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("does not retry a failed stream mutation through the active stream fast path", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const records: unknown[] = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      diagnostics: {
+        logFile: "test.jsonl",
+        recordEvent() {},
+        async recordRenderError(_error, snapshot) {
+          records.push(snapshot)
+        },
+      },
+    })
+
+    try {
+      ui.append({ kind: "agent", text: "first" })
+      await testRenderer.flush()
+
+      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      const nodeBox = transcriptScroll?.getChildren()[0] as { getChildren(): unknown[] } | undefined
+      const row = nodeBox?.getChildren()[0] as { getChildren(): unknown[] } | undefined
+      const textRenderable = row?.getChildren()[1] as object | undefined
+      expect(textRenderable).toBeDefined()
+      if (!textRenderable) return
+
+      const descriptor = Object.getOwnPropertyDescriptor(textRenderable, "content")
+      Object.defineProperty(textRenderable, "content", {
+        configurable: true,
+        get() {
+          return "first"
+        },
+        set() {
+          throw new Error("Failed to update stream text")
+        },
+      })
+
+      try {
+        ui.updateLast("second")
+        await testRenderer.flush()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+
+        expect(records.length).toBe(1)
+        expect(records[0]).toMatchObject({
+          context: { phase: "updateLast.activeStream", renderable: "TextRenderable" },
+        })
+      } finally {
+        if (descriptor) {
+          Object.defineProperty(textRenderable, "content", descriptor)
+        } else {
+          delete (textRenderable as { content?: unknown }).content
+        }
+      }
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("recovers partial transcript append without duplicating nodes", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const records: unknown[] = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      diagnostics: {
+        logFile: "test.jsonl",
+        recordEvent() {},
+        async recordRenderError(_error, snapshot) {
+          records.push(snapshot)
+        },
+      },
+    })
+
+    try {
+      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      expect(transcriptScroll).toBeDefined()
+      if (!transcriptScroll) return
+
+      ui.showPanel("hold transcript")
+      ui.append({ kind: "tool", text: "first" })
+      ui.append({ kind: "tool", text: "second" })
+
+      const originalAdd = transcriptScroll.add
+      let addCount = 0
+      transcriptScroll.add = ((...args: Parameters<typeof transcriptScroll.add>) => {
+        addCount += 1
+        const result = originalAdd.apply(transcriptScroll, args)
+        if (addCount === 2) {
+          throw new Error("Failed after partial append")
+        }
+        return result
+      }) as typeof transcriptScroll.add
+
+      try {
+        ui.hidePanel()
+        await testRenderer.flush()
+        await new Promise((resolve) => setTimeout(resolve, 20))
+        expect(records.length).toBe(1)
+      } finally {
+        transcriptScroll.add = originalAdd
+      }
+
+      ui.setStatus("retry render")
+      await testRenderer.flush()
+
+      const recoveredScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      expect(recoveredScroll?.getChildren().length).toBe(2)
     } finally {
       ui.destroy()
     }
