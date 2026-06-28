@@ -103,6 +103,9 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   let status = "starting"
   const agentLabel = options.agentLabel ?? "mock-agent"
   let inputValue = ""
+  const promptHistory: string[] = []
+  let historyIndex: number | null = null
+  let historyDraft = ""
   let windowActive = true
   let cursorVisible = true
   let submitHandler: ((prompt: string, options?: { panel?: boolean }) => void | Promise<void>) | undefined
@@ -199,6 +202,51 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       return { type: "char", char: key.sequence }
     }
     return null
+  }
+
+  function resetPromptHistoryBrowse(): void {
+    historyIndex = null
+    historyDraft = ""
+  }
+
+  function shouldRememberPrompt(prompt: string): boolean {
+    if (prompt.startsWith("/")) return false
+    const descriptor = registry.get(prompt)
+    return !(descriptor?.source === "local" && (descriptor.kind ?? "app") === "app")
+  }
+
+  function rememberPrompt(prompt: string): void {
+    if (shouldRememberPrompt(prompt)) {
+      promptHistory.push(prompt)
+    }
+    resetPromptHistoryBrowse()
+  }
+
+  function navigatePromptHistory(direction: "older" | "newer"): boolean {
+    if (promptHistory.length === 0) return false
+
+    if (direction === "older") {
+      if (historyIndex === null) {
+        historyDraft = inputValue
+        historyIndex = promptHistory.length - 1
+      } else {
+        historyIndex = Math.max(0, historyIndex - 1)
+      }
+      inputValue = promptHistory[historyIndex] ?? ""
+      return true
+    }
+
+    if (historyIndex === null) return false
+
+    if (historyIndex >= promptHistory.length - 1) {
+      inputValue = historyDraft
+      resetPromptHistoryBrowse()
+      return true
+    }
+
+    historyIndex += 1
+    inputValue = promptHistory[historyIndex] ?? ""
+    return true
   }
 
   function isNarrowSidebarWidth(): boolean {
@@ -570,6 +618,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
           const cmdName = cmdText.split(" ")[0]
           const descriptor = cmdName ? registry.get(cmdName) : undefined
           const isPanel = descriptor?.inputType === "panel"
+          rememberPrompt(cmdText)
           if (submitHandler) void submitHandler(cmdText, { panel: isPanel })
           inputValue = ""
         } else if (result.effect?.type === "fetch-options" && fetchOptions) {
@@ -624,14 +673,28 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       return
     }
 
+    if (key.name === "up" || key.name === "down") {
+      const navigated = navigatePromptHistory(key.name === "up" ? "older" : "newer")
+      if (navigated) {
+        cursorVisible = true
+        render()
+        return
+      }
+    }
+
     if (handleTranscriptScrollKey(key)) {
       pendingExit = false
       render()
       return
     }
 
+    const previousInputValue = inputValue
+    const wasBrowsingPromptHistory = historyIndex !== null
     const result = handleInputKey(inputValue, key)
     inputValue = result.value
+    if (wasBrowsingPromptHistory && (result.value !== previousInputValue || result.submit !== undefined || result.activate !== undefined)) {
+      resetPromptHistoryBrowse()
+    }
     cursorVisible = true
 
     if (result.activate === "slash") {
@@ -642,12 +705,14 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     render()
 
     if (result.submit && submitHandler) {
+      rememberPrompt(result.submit)
       void submitHandler(result.submit)
     }
   })
 
   renderer.keyInput.on("paste", (event: { bytes: Uint8Array }) => {
     const text = decodePasteBytes(event.bytes).replace(/\r\n?/g, " ")
+    if (historyIndex !== null) resetPromptHistoryBrowse()
     inputValue += text
     cursorVisible = true
     render()
