@@ -560,7 +560,7 @@ export async function createAgentClientUi(options: { headless?: boolean } = {}):
           { flexDirection: "column", borderStyle: "rounded", padding: 1, gap: 0 },
           ...transcript.slice(-20).map((entry) => Text({ content: `[${entry.kind}] ${entry.text}`, fg: colors[entry.kind] })),
         ),
-        Text({ content: "Demo mode sends one prompt automatically. Press Ctrl+C to exit.", fg: "#A6ADC8" }),
+        Text({ content: "Headless smoke sends one prompt automatically. Press Ctrl+C to exit.", fg: "#A6ADC8" }),
       ),
     )
   }
