@@ -36,7 +36,7 @@ The app is split into narrow modules:
 2. App starts mock agent by default, or real command from `--agent`.
 3. Transport sends `initialize` and resolves response by JSON-RPC ID.
 4. ACP client sends `session/new` and stores returned session ID.
-5. ACP client sends one demo `session/prompt`.
+5. In headless smoke runs, ACP client sends one sample `session/prompt`; interactive runs wait for user input.
 6. Agent emits `session/update` notifications while prompt request is pending.
 7. UI appends updates, responses, logs, and errors to transcript.
 

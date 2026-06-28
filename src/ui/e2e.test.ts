@@ -146,6 +146,7 @@ describe("OpenTUI command e2e", () => {
       const frame = testRenderer.captureCharFrame()
       expect(frame).toContain("server  opencode acp")
       expect(frame).not.toContain("server  mock-agent")
+      expect(frame).not.toContain("mode    demo")
     } finally {
       ui.destroy()
     }

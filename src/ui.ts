@@ -420,7 +420,6 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             Text({ content: "session", fg: opencodeTheme.primary, attributes: TextAttributes.BOLD }),
             Text({ content: `status  ${status}`, fg: opencodeTheme.text }),
             Text({ content: `server  ${agentLabel}`, fg: opencodeTheme.textMuted }),
-            Text({ content: "mode    demo", fg: opencodeTheme.textMuted }),
             Text({ content: "", fg: opencodeTheme.textMuted }),
             Text({ content: "capabilities", fg: opencodeTheme.accent }),
             Text({ content: "● prompt", fg: opencodeTheme.success }),
