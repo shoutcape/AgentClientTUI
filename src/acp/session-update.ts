@@ -4,8 +4,9 @@ import { recordOrNull as asRecord } from "./json"
 export type NormalizedSessionUpdate =
   | { type: "agent-text"; text: string; messageId?: string }
   | { type: "thought"; text: string; messageId?: string }
-  | { type: "tool"; text: string; toolCallId?: string; blocks?: NormalizedBlock[] }
+  | { type: "tool"; text: string; toolCallId?: string; toolKind?: string; toolStatus?: string; toolTitle?: string; blocks?: NormalizedBlock[] }
   | { type: "plan"; text: string }
+  | { type: "metadata"; text: string }
   | { type: "usage"; text: string }
   | { type: "status"; text: string }
 
@@ -115,6 +116,9 @@ export function normalizeSessionUpdate(method: string, params: JsonValue | undef
       type: "tool",
       text: `${kind} ${status}: ${title}`,
       ...(typeof update.toolCallId === "string" ? { toolCallId: update.toolCallId } : {}),
+      toolKind: kind,
+      toolStatus: status,
+      toolTitle: title,
     }
   }
 
@@ -133,6 +137,8 @@ export function normalizeSessionUpdate(method: string, params: JsonValue | undef
       text: lines.length ? lines.join("\n") : status,
       ...(blocks.length ? { blocks } : {}),
       ...(typeof update.toolCallId === "string" ? { toolCallId: update.toolCallId } : {}),
+      toolStatus: status,
+      ...(typeof update.title === "string" ? { toolTitle: update.title } : {}),
     }
   }
 
@@ -143,16 +149,15 @@ export function normalizeSessionUpdate(method: string, params: JsonValue | undef
     const costText = cost && typeof cost.amount === "number" && typeof cost.currency === "string"
       ? `, ${cost.amount} ${cost.currency}`
       : ""
-    return { type: "usage", text: `usage ${used}/${size} tokens${costText}` }
+    return { type: "metadata", text: `usage ${used}/${size} tokens${costText}` }
   }
 
   if (updateType === "available_commands_update") {
-    const count = Array.isArray(update.availableCommands) ? update.availableCommands.length : 0
-    return { type: "status", text: `commands updated (${count})` }
+    return null
   }
 
   if (updateType === "current_mode_update" && typeof update.currentModeId === "string") {
-    return { type: "status", text: `mode ${update.currentModeId}` }
+    return { type: "metadata", text: `mode ${update.currentModeId}` }
   }
 
   return updateType ? { type: "status", text: `unhandled ${updateType}` } : null

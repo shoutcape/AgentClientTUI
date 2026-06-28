@@ -3,9 +3,14 @@ import type { CommandState } from "../commands/state"
 import { buildCommandListWindow, type CommandListDisplayItem } from "./command-list"
 import { opencodeTheme } from "./view"
 
+export type DropdownRenderOptions = {
+  loadingText?: string
+}
+
 export function buildDropdown(
   state: Extract<CommandState, { phase: "listing" | "drilldown" }>,
   items: CommandListDisplayItem[],
+  options: DropdownRenderOptions = {},
 ) {
   const maxVisible = 8
   const listWindow = buildCommandListWindow(items, state.selectedIndex, maxVisible)
@@ -26,19 +31,20 @@ export function buildDropdown(
     children.push(
       Box(
         { flexDirection: "row", height: 1, paddingLeft: 1, paddingRight: 1 },
-        Text({ content: "Loading...", fg: opencodeTheme.textMuted }),
+        Text({ content: options.loadingText ?? "Loading...", fg: opencodeTheme.textMuted }),
       ),
     )
   } else {
     listWindow.rows.forEach(({ item, selected }) => {
       const boxOpts: Record<string, unknown> = {
+        ...(selected ? { id: "slash-dropdown-selected-row" } : {}),
         flexDirection: "row",
         width: "100%",
         height: 1,
         paddingLeft: 1,
         paddingRight: 1,
       }
-      if (selected) boxOpts.backgroundColor = opencodeTheme.primary
+      if (selected) boxOpts.backgroundColor = opencodeTheme.user
       children.push(
         Box(
           boxOpts,
@@ -64,11 +70,12 @@ export function buildDropdown(
   const totalHeight = rowCount + 2
   return Box(
     {
+      id: "slash-dropdown",
       flexDirection: "column",
       width: "100%",
       height: Math.min(totalHeight, 12),
-      borderStyle: "single",
-      borderColor: opencodeTheme.primary,
+      borderStyle: "rounded",
+      borderColor: opencodeTheme.user,
       backgroundColor: opencodeTheme.backgroundElement,
     },
     ...children,

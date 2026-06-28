@@ -182,6 +182,43 @@ describe("mock ACP agent commands", () => {
     expect(await agent.next()).toMatchObject({ id: promptId, result: { stopReason: "end_turn" } })
   })
 
+  test("emits a rich startup transcript demo from the dev prompt", async () => {
+    const agent = startMockAgent()
+    agent.send("initialize")
+    await agent.next()
+    agent.send("session/new")
+    await agent.next()
+    await agent.next()
+
+    const promptId = agent.send("session/prompt", {
+      prompt: "AgentClientTUI transcript container startup demo: cover status, markdown text, thought, plan, tools, usage, code, diff, and long scrolling output.",
+    })
+
+    const updates: Array<Record<string, unknown>> = []
+    while (true) {
+      const message = await agent.next()
+      if (message.id === promptId) {
+        expect(message).toMatchObject({ result: { stopReason: "end_turn" } })
+        break
+      }
+      expect(message).toMatchObject({ method: "session/update" })
+      const params = message.params as { update?: Record<string, unknown> }
+      if (params.update) updates.push(params.update)
+    }
+
+    expect(updates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ sessionUpdate: "agent_message_chunk" }),
+      expect.objectContaining({ sessionUpdate: "agent_thought_chunk" }),
+      expect.objectContaining({ sessionUpdate: "plan" }),
+      expect.objectContaining({ sessionUpdate: "tool_call" }),
+      expect.objectContaining({ sessionUpdate: "tool_call_update" }),
+      expect.objectContaining({ sessionUpdate: "usage_update" }),
+    ]))
+    expect(updates).toContainEqual(expect.objectContaining({ content: [{ type: "content", content: expect.objectContaining({ type: "code" }) }] }))
+    expect(updates).toContainEqual(expect.objectContaining({ content: [{ type: "diff", path: "src/example.ts", oldText: expect.any(String), newText: expect.any(String) }] }))
+    expect(JSON.stringify(updates)).toContain("Transcript demo line 12")
+  })
+
   test("emits code and diff output variants", async () => {
     const agent = startMockAgent()
     agent.send("initialize")
@@ -278,6 +315,37 @@ describe("mock ACP agent commands", () => {
 
       expect(result).toEqual({ stopReason: "end_turn" })
       expect(agentText.join("")).toContain("Permission selected: allow-once")
+    } finally {
+      transport.destroy()
+    }
+  })
+
+  test("requests questions and streams returned answers", async () => {
+    const transport = new JsonRpcTransport({
+      command: join(process.cwd(), "node_modules", ".bin", "tsx"),
+      args: ["src/mock-agent.ts"],
+      label: "mock-agent",
+    })
+    const agentText: string[] = []
+    transport.onEvent((event) => {
+      if (event.type !== "notification") return
+      const params = event.params as { update?: { text?: string } } | undefined
+      if (event.method === "session/update" && params?.update?.text) agentText.push(params.update.text)
+    })
+    transport.onRequest("session/question", () => ({
+      answers: [
+        { questionId: "color", answer: "blue" },
+        { questionId: "snack", answer: "pretzels" },
+      ],
+    }))
+
+    try {
+      await transport.request("initialize")
+      await transport.request("session/new")
+      const result = await transport.request("session/prompt", { prompt: "/question" })
+
+      expect(result).toEqual({ stopReason: "end_turn" })
+      expect(agentText.join("")).toContain("Question answers: color=blue, snack=pretzels")
     } finally {
       transport.destroy()
     }

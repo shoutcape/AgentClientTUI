@@ -1,6 +1,6 @@
+import { execFileSync } from "node:child_process"
 import {
   Box,
-  BoxRenderable,
   ScrollBoxRenderable,
   Text,
   TextAttributes,
@@ -11,6 +11,7 @@ import {
   t,
   type KeyEvent,
 } from "@opentui/core"
+import type { QuestionAnswer, QuestionRequest, QuestionResponse } from "./acp/question"
 import {
   clampCommandSelectedIndex,
   getCommandItems,
@@ -20,18 +21,27 @@ import {
 import { CommandRegistry } from "./commands/registry"
 import { configCommandsFromOptions, type SessionConfigOption } from "./commands/acp"
 import { transition, idle, type CommandOption, type CommandState, type CommandEvent } from "./commands/state"
+import {
+  formatThemeLoading,
+  formatThemedInfoStatus,
+  getAnimationTheme,
+  pickThemeWorkingWord,
+  type AnimationThemeName,
+} from "./ui/animation-theme"
 import { buildDropdown } from "./ui/dropdown"
 import { buildPalette } from "./ui/palette"
 import { buildPanelOverlay } from "./ui/panel-overlay"
 import { summarizeText, type RenderContext, type RenderDiagnostics } from "./ui/render-diagnostics"
 import { createTextUi } from "./ui/text-ui"
-import { buildTranscriptMessage } from "./ui/transcript-renderer"
+import { buildTranscriptMessage, getTranscriptActiveTextRenderable } from "./ui/transcript-renderer"
 import { buildInputBar, handleInputKey, opencodeTheme, type TranscriptEntry } from "./ui/view"
 import {
   appendTranscriptEntry,
   createTranscriptState,
   finishAgentMessage as finishTranscriptAgentMessage,
   routeTranscriptScrollAction,
+  toggleLatestToolBurstExpansion,
+  toggleToolBurstExpansionAtNode,
   updateActiveAgentMessage,
 } from "./ui/transcript"
 
@@ -48,11 +58,16 @@ export type UiOptions = {
   onSetConfigOption?: (configId: string, value: string) => Promise<SessionConfigOption[]>
   renderer?: Awaited<ReturnType<typeof createCliRenderer>>
   diagnostics?: RenderDiagnostics
+  branchLabel?: string
+  animationsEnabled?: boolean
+  animationTheme?: AnimationThemeName
+  random?: () => number
 }
 
 export type AgentClientUi = {
   isInteractive: boolean
   setStatus(status: string): void
+  setAnimationTheme(themeName: AnimationThemeName): void
   onSubmit(handler: (prompt: string, options?: { panel?: boolean }) => void | Promise<void>): void
   append(entry: TranscriptEntry): void
   updateLast(text: string): void
@@ -61,11 +76,34 @@ export type AgentClientUi = {
   updatePanel(content: string): void
   hidePanel(): void
   toggleSidebar(): void
+  askQuestions(request: QuestionRequest): Promise<QuestionResponse>
   destroy(): void
+}
+
+type ActiveQuestionPrompt = {
+  request: QuestionRequest
+  index: number
+  selectedIndex: number
+  typedAnswer: string
+  answers: QuestionAnswer[]
+  resolve(response: QuestionResponse): void
+  reject(error: Error): void
 }
 
 type TerminalFocusRenderer = {
   stdout?: Pick<NodeJS.WriteStream, "write">
+}
+
+function currentGitBranch(): string {
+  try {
+    return execFileSync("git", ["branch", "--show-current"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim() || "detached"
+  } catch {
+    return "unknown"
+  }
 }
 
 function enableTerminalFocusReporting(renderer: TerminalFocusRenderer): () => void {
@@ -102,6 +140,12 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
 
   let status = "starting"
   const agentLabel = options.agentLabel ?? "mock-agent"
+  const branchLabel = options.branchLabel ?? currentGitBranch()
+  const animationsEnabled = options.animationsEnabled ?? true
+  const random = options.random ?? Math.random
+  let animationTheme = getAnimationTheme(options.animationTheme ?? "quiet")
+  let workingWord = pickThemeWorkingWord(animationTheme, random)
+  let animationFrame = 0
   let inputValue = ""
   const promptHistory: string[] = []
   let historyIndex: number | null = null
@@ -116,6 +160,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   const diagnostics = options.diagnostics
   const setConfigOption = options.onSetConfigOption
   let panelOverlay: { title: string; content: string } | null = null
+  let activeQuestionPrompt: ActiveQuestionPrompt | null = null
   let sidebarMode: SidebarMode = "auto"
   let pendingExit = false
   let transcriptScroll: ScrollBoxRenderable | undefined
@@ -173,12 +218,13 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         columns: process.stdout.columns,
         rows: process.stdout.rows,
       },
-      transcript: {
-        version: transcriptContentVersion,
-        renderedNodeCount,
-        nodeCount: transcript.nodes.length,
-        ...(transcript.activeAgentNodeId ? { activeAgentNodeId: transcript.activeAgentNodeId } : {}),
-      },
+        transcript: {
+          version: transcriptContentVersion,
+          renderedNodeCount,
+          nodeCount: transcript.nodes.length,
+          ...(transcript.activeAgentNodeId ? { activeAgentNodeId: transcript.activeAgentNodeId } : {}),
+          ...(transcript.activeToolBurstNodeId ? { activeToolBurstNodeId: transcript.activeToolBurstNodeId } : {}),
+        },
       ...(currentRenderContext ? { context: currentRenderContext } : {}),
     }
   }
@@ -264,7 +310,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     if (renderedTranscriptVersion === transcriptContentVersion) return
 
     // If the active streaming node changed, update its text in place
-    if (activeStreamNodeId && transcript.activeAgentNodeId === activeStreamNodeId && activeStreamRenderable) {
+    if (activeStreamNodeId && transcript.activeAgentNodeId === activeStreamNodeId && activeStreamRenderable && renderedNodeCount === transcript.nodes.length) {
       const node = transcript.nodes.find((n) => n.id === activeStreamNodeId)
       if (node && node.blocks[0]?.type === "text") {
         const streamRenderable = activeStreamRenderable
@@ -290,7 +336,11 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     for (let i = renderedNodeCount; i < nodes.length; i++) {
       const node = nodes[i]
       if (!node) continue
-      const msg = buildTranscriptMessage(renderer, node, { withRenderContext: buildWithRenderContext })
+      const msg = buildTranscriptMessage(renderer, node, {
+        withRenderContext: buildWithRenderContext,
+        onToolBurstMouseUp: toggleToolBurstExpansion,
+        animationTheme,
+      })
       const scroll = transcriptScroll
       buildWithRenderContext({
         phase: "syncTranscript.addNode",
@@ -304,15 +354,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       // Track the active streaming node's text renderable
       if (node.id === transcript.activeAgentNodeId && node.kind === "agent") {
         activeStreamNodeId = node.id
-        const nodeBox = msg as BoxRenderable
-        const children = nodeBox.getChildren()
-        if (children.length > 0) {
-          const row = children[0] as BoxRenderable
-          const rowChildren = row.getChildren()
-          if (rowChildren.length > 1 && rowChildren[1] instanceof TextRenderable) {
-            activeStreamRenderable = rowChildren[1]
-          }
-        }
+        activeStreamRenderable = getTranscriptActiveTextRenderable(msg, node)
       }
     }
     renderedNodeCount = nodes.length
@@ -354,6 +396,139 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     return false
   }
 
+  function toggleToolBurstExpansion(nodeId?: string): void {
+    const nextTranscript = nodeId ? toggleToolBurstExpansionAtNode(transcript, nodeId) : toggleLatestToolBurstExpansion(transcript)
+    if (nextTranscript === transcript) return
+    transcript = nextTranscript
+    transcriptContentVersion += 1
+    resetTranscriptRenderCache()
+    render()
+  }
+
+  function currentQuestion(): QuestionRequest["questions"][number] | undefined {
+    if (!activeQuestionPrompt) return undefined
+    return activeQuestionPrompt.request.questions[activeQuestionPrompt.index]
+  }
+
+  function answerCurrentQuestion(): void {
+    if (!activeQuestionPrompt) return
+    const question = currentQuestion()
+    if (!question) return
+
+    const typed = activeQuestionPrompt.typedAnswer.trim()
+    const selected = question.options[activeQuestionPrompt.selectedIndex]
+    const answer = typed || selected?.id
+    if (!answer) return
+
+    activeQuestionPrompt.answers[activeQuestionPrompt.index] = { questionId: question.id, answer }
+    if (activeQuestionPrompt.index < activeQuestionPrompt.request.questions.length - 1) {
+      activeQuestionPrompt.index += 1
+      activeQuestionPrompt.selectedIndex = 0
+      activeQuestionPrompt.typedAnswer = ""
+      render()
+      return
+    }
+
+    const completed = activeQuestionPrompt
+    activeQuestionPrompt = null
+    completed.resolve({ answers: completed.answers })
+    render()
+  }
+
+  function cancelQuestionPrompt(): void {
+    if (!activeQuestionPrompt) return
+    const cancelled = activeQuestionPrompt
+    activeQuestionPrompt = null
+    cancelled.reject(new Error("Question prompt cancelled"))
+    render()
+  }
+
+  function handleQuestionKey(key: KeyEvent): boolean {
+    if (!activeQuestionPrompt) return false
+    const question = currentQuestion()
+    if (!question) return true
+
+    if (key.name === "escape") {
+      cancelQuestionPrompt()
+      return true
+    }
+    if (key.name === "up") {
+      activeQuestionPrompt.selectedIndex = Math.max(0, activeQuestionPrompt.selectedIndex - 1)
+      render()
+      return true
+    }
+    if (key.name === "down") {
+      activeQuestionPrompt.selectedIndex = Math.min(question.options.length - 1, activeQuestionPrompt.selectedIndex + 1)
+      render()
+      return true
+    }
+    if (key.name === "backspace") {
+      activeQuestionPrompt.typedAnswer = activeQuestionPrompt.typedAnswer.slice(0, -1)
+      render()
+      return true
+    }
+    if (key.name === "return") {
+      answerCurrentQuestion()
+      return true
+    }
+    if (!key.ctrl && !key.meta && key.name === "space") {
+      activeQuestionPrompt.typedAnswer += " "
+      render()
+      return true
+    }
+    if (!key.ctrl && !key.meta && key.sequence && key.sequence.length === 1 && key.sequence >= " ") {
+      activeQuestionPrompt.typedAnswer += key.sequence
+      render()
+      return true
+    }
+    return true
+  }
+
+  function buildQuestionOverlay() {
+    if (!activeQuestionPrompt) return null
+    const question = currentQuestion()
+    if (!question) return null
+    const progress = `${activeQuestionPrompt.index + 1}/${activeQuestionPrompt.request.questions.length}`
+    const typed = activeQuestionPrompt.typedAnswer
+    const width = Math.min(72, Math.max(40, renderer.width - 8))
+    return Box(
+      {
+        id: "question-overlay",
+        position: "absolute",
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+      },
+      Box(
+        {
+          flexDirection: "column",
+          width,
+          backgroundColor: opencodeTheme.backgroundPanel,
+          borderStyle: "rounded",
+          borderColor: opencodeTheme.primary,
+          padding: 1,
+          gap: 1,
+        },
+        Box(
+          { flexDirection: "row", justifyContent: "space-between", width: "100%" },
+          Text({ content: activeQuestionPrompt.request.header, fg: opencodeTheme.primary, attributes: TextAttributes.BOLD }),
+          Text({ content: progress, fg: opencodeTheme.textMuted }),
+        ),
+        Text({ content: question.text, fg: opencodeTheme.text }),
+        ...question.options.map((option, optionIndex) => Text({
+          content: `${optionIndex === activeQuestionPrompt?.selectedIndex ? ">" : " "} ${option.label}`,
+          fg: optionIndex === activeQuestionPrompt?.selectedIndex ? opencodeTheme.accent : opencodeTheme.text,
+        })),
+        Text({ content: `custom: ${typed}${windowActive && cursorVisible ? "█" : ""}`, fg: typed ? opencodeTheme.text : opencodeTheme.textMuted }),
+        Text({ content: "Enter submits, arrows choose, type custom, Esc cancels", fg: opencodeTheme.textMuted }),
+      ),
+    )
+  }
+
   function scheduleRender(): void {
     if (renderScheduled) return
     renderScheduled = true
@@ -371,7 +546,9 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
         existingRoot.destroyRecursively()
       }
 
-    const inputBar = buildInputBar(inputValue, { cursorVisible: windowActive && cursorVisible })
+    const inputBar = buildInputBar(inputValue, {
+      cursorVisible: windowActive && cursorVisible,
+    })
     const cwdPath = process.cwd()
 
     const showPalette = commandState.phase !== "idle" && "surface" in commandState && commandState.surface === "palette"
@@ -403,6 +580,7 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
           },
         }))
         transcriptScroll.focusable = false
+        transcriptScroll.verticalScrollBar.visible = false
       }
       syncTranscript()
 
@@ -420,6 +598,8 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             Text({ content: "session", fg: opencodeTheme.primary, attributes: TextAttributes.BOLD }),
             Text({ content: `status  ${status}`, fg: opencodeTheme.text }),
             Text({ content: `server  ${agentLabel}`, fg: opencodeTheme.textMuted }),
+            Text({ content: "cwd", fg: opencodeTheme.accent }),
+            Text({ id: "sidebar-cwd", content: cwdPath, fg: opencodeTheme.textMuted, wrapMode: "char", width: "100%" }),
             Text({ content: "", fg: opencodeTheme.textMuted }),
             Text({ content: "capabilities", fg: opencodeTheme.accent }),
             Text({ content: "● prompt", fg: opencodeTheme.success }),
@@ -450,9 +630,14 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       )
     })()
 
+    const commandLoadingText = formatThemeLoading(animationTheme, animationFrame, animationsEnabled, "Loading options")
+
     const dropdownElement = showDropdown && (commandState.phase === "listing" || commandState.phase === "drilldown")
-      ? buildDropdown(commandState, getCommandItems(commandState, registry))
+      ? buildDropdown(commandState, getCommandItems(commandState, registry), { loadingText: commandLoadingText })
       : null
+
+    const inputActive = windowActive && (inputValue.length > 0 || showDropdown)
+    const inputBorderColor = inputActive ? opencodeTheme.user : opencodeTheme.userBorder
 
     const paletteElement = showPalette && (commandState.phase === "listing" || commandState.phase === "drilldown")
       ? Box(
@@ -466,24 +651,36 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             alignItems: "center",
             justifyContent: "center",
           },
-          buildPalette(commandState, getCommandItems(commandState, registry)),
+          buildPalette(commandState, getCommandItems(commandState, registry), { loadingText: commandLoadingText }),
         )
       : null
 
+    const questionOverlay = buildQuestionOverlay()
     const inputElement = Box(
       {
+        id: "input-bar",
         flexDirection: "row",
         width: "100%",
         minHeight: 3,
-        backgroundColor: opencodeTheme.backgroundElement,
-        borderStyle: "single",
-        borderColor: opencodeTheme.borderSubtle,
+        backgroundColor: opencodeTheme.backgroundPanel,
+        borderStyle: "rounded",
+        borderColor: inputBorderColor,
         paddingLeft: 1,
         paddingRight: 1,
         gap: 1,
       },
-      Text({ content: inputBar.prompt, fg: inputBar.promptColor, attributes: TextAttributes.BOLD }),
-      Text({ content: inputBar.value ?? "", fg: inputBar.valueColor ?? opencodeTheme.text }),
+      Text({ id: "input-prompt", content: inputBar.prompt, fg: inputBar.promptColor, attributes: TextAttributes.BOLD }),
+      inputBar.value || inputBar.cursor
+        ? Box(
+            { flexDirection: "row", gap: 0 },
+            inputBar.value
+              ? Text({ id: "input-value", content: inputBar.value, fg: inputBar.valueColor ?? opencodeTheme.text })
+              : null,
+            inputBar.cursor
+              ? Text({ id: "input-cursor", content: inputBar.cursor, fg: inputBar.cursorColor ?? opencodeTheme.user })
+              : null,
+          )
+        : null,
     )
 
     const inputStack = Box(
@@ -495,6 +692,18 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             dropdownElement,
           )
         : null,
+    )
+
+    const infoBar = Box(
+      { flexDirection: "row", justifyContent: "space-between", width: "100%", paddingLeft: 1, paddingRight: 1, backgroundColor: opencodeTheme.background },
+      Text({ content: formatThemedInfoStatus(animationTheme, status, animationFrame, workingWord, animationsEnabled), fg: opencodeTheme.secondary }),
+      pendingExit ? Text({ content: "press Ctrl+C again to exit", fg: opencodeTheme.warning }) : null,
+    )
+
+    const footer = Box(
+      { flexDirection: "row", justifyContent: "space-between", width: "100%", paddingLeft: 1, paddingRight: 1, marginTop: 1, backgroundColor: opencodeTheme.background },
+      Text({ content: t`${fg(opencodeTheme.error)("")} ${branchLabel}`, fg: opencodeTheme.textMuted, wrapMode: "none" }),
+      Text({ content: "Ctrl+P menu", fg: opencodeTheme.textMuted }),
     )
 
     buildWithRenderContext({
@@ -510,26 +719,19 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
             height: "100%",
             backgroundColor: opencodeTheme.background,
             padding: 1,
-            gap: 1,
+            paddingBottom: 2,
+            gap: 0,
           },
           Box(
             { flexDirection: "row", justifyContent: "space-between", width: "100%" },
             Text({ content: t`${fg(opencodeTheme.primary)("Agent")}Client${fg(opencodeTheme.accent)("TUI")}`, attributes: TextAttributes.BOLD }),
-            Text({ content: `● ${status}`, fg: opencodeTheme.secondary }),
           ),
           mainContent,
           inputStack,
-          Box(
-            {
-              flexDirection: "row",
-              justifyContent: "space-between",
-              width: "100%",
-              backgroundColor: opencodeTheme.background,
-            },
-            Text({ content: cwdPath, fg: opencodeTheme.textMuted }),
-            Text({ content: pendingExit ? "press Ctrl+C again to exit" : "/ commands · Ctrl+P palette · Ctrl+C exit", fg: pendingExit ? opencodeTheme.warning : opencodeTheme.textMuted }),
-          ),
+          infoBar,
+          footer,
           paletteElement,
+          questionOverlay,
         ),
       )
     })
@@ -550,6 +752,13 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
     cursorVisible = !cursorVisible
     render()
   }, 500)
+
+  const animationTimer = setInterval(() => {
+    if (!animationsEnabled) return
+    if (status !== "prompting" && commandState.phase === "idle") return
+    animationFrame += 1
+    render()
+  }, 80)
 
   renderer.on("focus", () => {
     windowActive = true
@@ -587,10 +796,17 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
 
     pendingExit = false
 
+    if (handleQuestionKey(key)) return
+
     if (key.name === "p" && key.ctrl) {
       const result = transition(commandState, { type: "ctrl-p" })
       commandState = result.state
       render()
+      return
+    }
+
+    if (key.name === "o" && key.ctrl) {
+      toggleToolBurstExpansion()
       return
     }
 
@@ -711,6 +927,12 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
 
   renderer.keyInput.on("paste", (event: { bytes: Uint8Array }) => {
     const text = decodePasteBytes(event.bytes).replace(/\r\n?/g, " ")
+    if (activeQuestionPrompt) {
+      activeQuestionPrompt.typedAnswer += text
+      cursorVisible = true
+      render()
+      return
+    }
     if (historyIndex !== null) resetPromptHistoryBrowse()
     inputValue += text
     cursorVisible = true
@@ -720,14 +942,29 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
   return {
     isInteractive: true,
     setStatus(nextStatus) {
+      if (nextStatus === "prompting" && status !== "prompting") {
+        workingWord = pickThemeWorkingWord(animationTheme, random)
+        animationFrame = 0
+      }
       status = nextStatus
+      render()
+    },
+    setAnimationTheme(themeName) {
+      animationTheme = getAnimationTheme(themeName)
+      workingWord = pickThemeWorkingWord(animationTheme, random)
+      animationFrame = 0
+      resetTranscriptRenderCache()
       render()
     },
     onSubmit(handler) {
       submitHandler = handler
     },
     append(entry) {
+      const previousNodeCount = transcript.nodes.length
       transcript = appendTranscriptEntry(transcript, entry)
+      if (entry.kind === "tool" && transcript.nodes.length === previousNodeCount) {
+        resetTranscriptRenderCache()
+      }
       transcriptContentVersion += 1
       render()
     },
@@ -783,8 +1020,28 @@ export async function createAgentClientUi(options: UiOptions = {}): Promise<Agen
       sidebarMode = isSidebarVisible() ? "forced-hidden" : "forced-visible"
       render()
     },
+    askQuestions(request) {
+      if (activeQuestionPrompt) return Promise.reject(new Error("Question prompt already active"))
+      return new Promise<QuestionResponse>((resolve, reject) => {
+        activeQuestionPrompt = {
+          request,
+          index: 0,
+          selectedIndex: 0,
+          typedAnswer: "",
+          answers: [],
+          resolve,
+          reject,
+        }
+        render()
+      })
+    },
     destroy() {
+      if (activeQuestionPrompt) {
+        activeQuestionPrompt.reject(new Error("Question prompt cancelled"))
+        activeQuestionPrompt = null
+      }
       clearInterval(blinkTimer)
+      clearInterval(animationTimer)
       disableTerminalFocusReporting()
       renderer.destroy()
     },

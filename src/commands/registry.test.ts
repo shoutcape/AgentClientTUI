@@ -152,6 +152,24 @@ describe("CommandRegistry", () => {
     expect(reg.searchPalette("mode").map((cmd) => cmd.name)).toEqual(["Mode", "Models"])
   })
 
+  test("slash search includes local slash app commands", () => {
+    const reg = new CommandRegistry()
+    const animationTheme: CommandDescriptor = {
+      name: "/animation-theme",
+      description: "Switch animation/icon theme",
+      source: "local",
+      kind: "app",
+      options: [
+        { label: "quiet", value: "quiet" },
+        { label: "cyber", value: "cyber" },
+      ],
+    }
+    reg.addLocalCommand(animationTheme)
+
+    expect(reg.searchSlash("animation").map((cmd) => cmd.name)).toEqual(["/animation-theme"])
+    expect(reg.searchPalette("animation").map((cmd) => cmd.name)).toEqual(["/animation-theme"])
+  })
+
   test("palette search ranks names starting with query before other matches", () => {
     const reg = new CommandRegistry()
     const toggleSessionPanel: CommandDescriptor = {

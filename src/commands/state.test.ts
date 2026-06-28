@@ -169,6 +169,30 @@ describe("Command State Machine", () => {
     expect(result.effect).toEqual({ type: "execute", command: "/model claude-opus" })
   })
 
+  test("select animation theme option executes app command with selected value", () => {
+    const animationTheme: CommandDescriptor = {
+      name: "/animation-theme",
+      description: "Switch animation/icon theme",
+      source: "local",
+      kind: "app",
+      options: [{ label: "cyber", value: "cyber" }],
+    }
+    const drilldown: CommandState = {
+      phase: "drilldown",
+      parent: animationTheme,
+      items: [{ label: "cyber", value: "cyber" }],
+      loading: false,
+      query: "",
+      selectedIndex: 0,
+      surface: "dropdown",
+    }
+
+    const result = transition(drilldown, { type: "select-item", item: { label: "cyber", value: "cyber" } })
+
+    expect(result.state.phase).toBe("idle")
+    expect(result.effect).toEqual({ type: "execute", command: "/animation-theme cyber" })
+  })
+
   test("backspace on empty drilldown query returns to listing", () => {
     const drilldown: CommandState = {
       phase: "drilldown", parent: context, items: ["show", "add"], loading: false,

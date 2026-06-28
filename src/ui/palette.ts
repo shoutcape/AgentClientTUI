@@ -3,7 +3,15 @@ import type { CommandState } from "../commands/state"
 import { buildCommandListWindow, type CommandListDisplayItem } from "./command-list"
 import { opencodeTheme } from "./view"
 
-export function buildPalette(state: Extract<CommandState, { phase: "listing" | "drilldown" }>, items: CommandListDisplayItem[]) {
+export type PaletteRenderOptions = {
+  loadingText?: string
+}
+
+export function buildPalette(
+  state: Extract<CommandState, { phase: "listing" | "drilldown" }>,
+  items: CommandListDisplayItem[],
+  options: PaletteRenderOptions = {},
+) {
   const maxVisible = 12
   const listWindow = buildCommandListWindow(items, state.selectedIndex, maxVisible)
   const isLoading = state.phase === "drilldown" && state.loading
@@ -24,7 +32,7 @@ export function buildPalette(state: Extract<CommandState, { phase: "listing" | "
     itemRows.push(
       Box(
         { flexDirection: "row", height: 1, paddingLeft: 1 },
-        Text({ content: "Loading...", fg: opencodeTheme.textMuted }),
+        Text({ content: options.loadingText ?? "Loading...", fg: opencodeTheme.textMuted }),
       ),
     )
   } else {
@@ -37,7 +45,7 @@ export function buildPalette(state: Extract<CommandState, { phase: "listing" | "
             height: 1,
             paddingLeft: 1,
             paddingRight: 1,
-            ...(selected ? { backgroundColor: opencodeTheme.accent } : {}),
+            ...(selected ? { id: "command-palette-selected-row", backgroundColor: opencodeTheme.accent } : {}),
           },
           Text({ content: item.name, fg: selected ? "#fff" : opencodeTheme.text }),
           Text({ content: ` \u2014 ${item.description}`, fg: selected ? "#fff" : opencodeTheme.textMuted }),
@@ -48,6 +56,7 @@ export function buildPalette(state: Extract<CommandState, { phase: "listing" | "
 
   return Box(
     {
+      id: "command-palette",
       flexDirection: "column",
       width: "70%",
       borderStyle: "single",
