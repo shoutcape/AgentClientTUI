@@ -1,43 +1,20 @@
-import { join } from "node:path"
 import { cwd, execPath } from "node:process"
-import { commandFromShellText } from "./agent-command"
 import { AcpClient } from "./acp/client"
 import { selectPermissionOption } from "./acp/permission"
+import { normalizeQuestionRequest } from "./acp/question"
 import { normalizeSessionUpdate } from "./acp/session-update"
 import { JsonRpcTransport } from "./acp/transport"
-import type { AgentCommand, TransportEvent } from "./acp/types"
+import type { TransportEvent } from "./acp/types"
+import { parseArgs } from "./cli-args"
 import { commandsFromKiroAvailable, commandsFromStandardUpdate, configCommandsFromOptions } from "./commands/acp"
 import { CommandRegistry } from "./commands/registry"
+import { installShutdownHandlers } from "./process-cleanup"
 import { createPromptQueue } from "./prompt-queue"
 import { createAgentClientUi } from "./ui"
+import { animationThemeNames, isAnimationThemeName } from "./ui/animation-theme"
 import { createRenderDiagnostics } from "./ui/render-diagnostics"
 
-function parseArgs(argv: string[]): { agent: AgentCommand; headless: boolean } {
-  const agentFlag = argv.indexOf("--agent")
-  const headless = argv.includes("--headless")
-
-  if (agentFlag >= 0) {
-    const commandText = argv[agentFlag + 1]
-    if (!commandText) {
-      throw new Error("--agent requires a command string")
-    }
-
-    return { agent: commandFromShellText(commandText), headless }
-  }
-
-  return {
-    agent: {
-      command: isBunRuntime() ? execPath : join(cwd(), "node_modules", ".bin", "tsx"),
-      args: isBunRuntime() ? ["run", "src/mock-agent.ts"] : ["src/mock-agent.ts"],
-      label: "mock-agent",
-    },
-    headless,
-  }
-}
-
-function isBunRuntime(): boolean {
-  return typeof process.versions.bun === "string"
-}
+const STARTUP_TRANSCRIPT_DEMO_PROMPT = "AgentClientTUI transcript container startup demo: cover status, markdown text, thought, plan, tools, usage, code, diff, and long scrolling output. Make it intentionally verbose so HMR restarts show wrapping, tool grouping, code blocks, diffs, metadata, and sticky scrolling behavior."
 
 const SENSITIVE_ARG_PATTERN = /(?:api[_-]?key|token|secret|password|authorization|cookie)/i
 
@@ -63,7 +40,11 @@ function redactArgv(argv: string[]): string[] {
     return arg
   })
 }
-const { agent, headless } = parseArgs(process.argv.slice(2))
+const { agent, headless, demoTranscript, animationTheme } = parseArgs(process.argv.slice(2), {
+  isBunRuntime: typeof process.versions.bun === "string",
+  execPath,
+  cwd: cwd(),
+})
 const diagnostics = createRenderDiagnostics({ agentLabel: agent.label })
 diagnostics.recordEvent("startup", {
   agentLabel: agent.label,
@@ -74,6 +55,13 @@ diagnostics.recordEvent("startup", {
 const registry = new CommandRegistry()
 registry.addLocalCommand({ name: "Quit", description: "Exit AgentClientTUI", source: "local", kind: "app" })
 registry.addLocalCommand({ name: "Toggle Session Panel", description: "Show/hide sidebar", source: "local", kind: "app" })
+registry.addLocalCommand({
+  name: "/animation-theme",
+  description: "Switch animation/icon theme",
+  source: "local",
+  kind: "app",
+  options: animationThemeNames.map((name) => ({ label: name, value: name, description: `${name} animation/icon theme` })),
+})
 const transport = new JsonRpcTransport(agent)
 const client = new AcpClient(transport)
 let activeSessionId = ""
@@ -83,6 +71,7 @@ const ui = await createAgentClientUi({
   agentLabel: agent.label,
   registry,
   diagnostics,
+  animationTheme,
   onFetchOptions: (method) => client.fetchOptions(method),
   onSetConfigOption: (configId, value) => client.setConfigOption(activeSessionId, configId, value),
 })
@@ -96,6 +85,14 @@ transport.onRequest("session/request_permission", (_method, params) => {
     },
   }
 })
+
+function handleQuestionRequest(_method: string, params: unknown) {
+  return ui.askQuestions(normalizeQuestionRequest(params))
+}
+
+for (const method of ["session/question", "session/request_question", "session/request_questions", "tools/question", "question"]) {
+  transport.onRequest(method, handleQuestionRequest)
+}
 
 let isStreaming = false
 let streamingText = ""
@@ -115,7 +112,6 @@ transport.onEvent((event) => {
       const descriptors = commandsFromStandardUpdate(event.params)
       if (descriptors) {
         registry.setAcpCommands(descriptors)
-        ui.append({ kind: "status", text: `commands updated (${descriptors.length})` })
         return
       }
     }
@@ -133,8 +129,20 @@ transport.onEvent((event) => {
         streamingText += update.text
         ui.updateLast(streamingText)
       }
+    } else if (update?.type === "metadata") {
+      ui.setStatus(update.text)
+    } else if (update?.type === "tool") {
+      ui.append({
+        kind: "tool",
+        text: update.text,
+        ...(update.blocks ? { blocks: update.blocks } : {}),
+        ...(update.toolCallId ? { toolCallId: update.toolCallId } : {}),
+        ...(update.toolKind ? { toolKind: update.toolKind } : {}),
+        ...(update.toolStatus ? { toolStatus: update.toolStatus } : {}),
+        ...(update.toolTitle ? { toolTitle: update.toolTitle } : {}),
+      })
     } else if (update) {
-      ui.append({ kind: update.type, text: update.text, ...("blocks" in update ? { blocks: update.blocks } : {}) })
+      ui.append({ kind: update.type, text: update.text })
     }
   } else if (event.type === "stderr") {
     ui.append({ kind: "log", text: event.text.trim() })
@@ -145,10 +153,9 @@ transport.onEvent((event) => {
   }
 })
 
-process.on("SIGINT", () => {
+installShutdownHandlers(process, () => {
   transport.destroy()
   ui.destroy()
-  process.exit(0)
 })
 
 process.on("uncaughtExceptionMonitor", (error) => {
@@ -226,14 +233,28 @@ try {
       ui.toggleSidebar()
       return
     }
+    if (prompt.startsWith("/animation-theme ")) {
+      const themeName = prompt.slice("/animation-theme ".length).trim()
+      if (!isAnimationThemeName(themeName)) {
+        ui.append({ kind: "error", text: `Unknown animation theme: ${themeName}` })
+        return
+      }
+      ui.setAnimationTheme(themeName)
+      ui.append({ kind: "status", text: `animation theme set to ${themeName}` })
+      return
+    }
 
     promptQueue.enqueue(prompt, options)
   }
 
   ui.onSubmit(sendPrompt)
 
+  const startupPrompt = demoTranscript ? STARTUP_TRANSCRIPT_DEMO_PROMPT : headless ? "Say hello from AgentClientTUI." : null
+  if (startupPrompt) {
+    await runPrompt(startupPrompt)
+  }
+
   if (headless) {
-    await runPrompt("Say hello from AgentClientTUI.")
     transport.destroy()
     ui.destroy()
   }

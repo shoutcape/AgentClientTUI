@@ -99,6 +99,19 @@ function extractSelectedOption(message: JsonRpcMessage): string {
   return record.optionId
 }
 
+function extractQuestionAnswers(message: JsonRpcMessage): string {
+  const result = message.result
+  if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("Invalid question response")
+  const answers = (result as { answers?: unknown }).answers
+  if (!Array.isArray(answers)) throw new Error("Invalid question response")
+  return answers.map((answer) => {
+    if (!answer || typeof answer !== "object" || Array.isArray(answer)) throw new Error("Invalid question response")
+    const record = answer as { questionId?: unknown; answer?: unknown }
+    if (typeof record.questionId !== "string" || typeof record.answer !== "string") throw new Error("Invalid question response")
+    return `${record.questionId}=${record.answer}`
+  }).join(", ")
+}
+
 function streamText(text: string): void {
   write({
     jsonrpc: "2.0",
@@ -190,6 +203,24 @@ function streamDiff(): void {
   })
 }
 
+function isStartupTranscriptDemoPrompt(prompt: string): boolean {
+  return prompt.toLowerCase().includes("transcript container startup demo")
+}
+
+function streamStartupTranscriptDemo(): void {
+  streamStandardText("AgentClientTUI transcript container demo starting. This text is intentionally wordy so wrapping, row spacing, and streaming updates are visible after every watch restart.\n")
+  streamThought("Checking transcript treatments for reasoning, tool grouping, structured blocks, metadata, and long scrollback.")
+  streamPlan()
+  streamToolLifecycle()
+  streamCode()
+  streamDiff()
+  streamUsage()
+  for (let i = 1; i <= 18; i += 1) {
+    streamStandardText(`Transcript demo line ${i}: sample output for scrollback, sticky bottom behavior, and visual density checks.\n`)
+  }
+  streamStandardText("Startup transcript demo complete. Edit UI code and Bun watch will restart back to this populated state.")
+}
+
 function clientRequest(method: string, params?: unknown): Promise<JsonRpcMessage> {
   const id = nextClientRequestId++
   write(params === undefined
@@ -277,6 +308,12 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
   if (message.method === "session/prompt") {
     const prompt = extractPrompt(message.params)
 
+    if (isStartupTranscriptDemoPrompt(prompt)) {
+      streamStartupTranscriptDemo()
+      result(message.id, { stopReason: "end_turn" })
+      return
+    }
+
     if (prompt.startsWith("/fail")) {
       error(message.id, -32000, "Mock command failed")
       return
@@ -332,6 +369,31 @@ createInterface({ input: process.stdin }).on("line", async (line) => {
         })
         const selected = extractSelectedOption(permission)
         streamText(`Permission selected: ${selected}.`)
+        result(message.id, { stopReason: "end_turn" })
+      } catch (requestError) {
+        error(message.id, -32000, (requestError as Error).message)
+      }
+      return
+    }
+
+    if (prompt.startsWith("/question")) {
+      try {
+        const answers = await clientRequest("session/question", {
+          sessionId,
+          title: "Mock questions",
+          questions: [
+            {
+              id: "color",
+              question: "Choose a color",
+              options: [
+                { id: "red", label: "Red" },
+                { id: "blue", label: "Blue" },
+              ],
+            },
+            { id: "snack", question: "Name a snack" },
+          ],
+        })
+        streamText(`Question answers: ${extractQuestionAnswers(answers)}.`)
         result(message.id, { stopReason: "end_turn" })
       } catch (requestError) {
         error(message.id, -32000, (requestError as Error).message)

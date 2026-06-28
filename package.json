@@ -6,6 +6,7 @@
   "description": "Interactive terminal UI for ACP-compatible agent servers.",
   "scripts": {
     "dev": "$HOME/.bun/bin/bun run src/index.ts",
+    "dev:watch": "$HOME/.bun/bin/bun run --watch src/index.ts --demo-transcript",
     "dev:node": "tsx src/index.ts",
     "mock-agent": "$HOME/.bun/bin/bun run src/mock-agent.ts",
     "smoke": "tsx scripts/smoke.ts",

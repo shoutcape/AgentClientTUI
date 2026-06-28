@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Readable, Writable } from "node:stream"
-import { BoxRenderable, createCliRenderer, ScrollBoxRenderable } from "@opentui/core"
+import { BoxRenderable, createCliRenderer, ScrollBoxRenderable, TextRenderable, Yoga } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { CommandRegistry } from "../commands/registry"
 import { createAgentClientUi } from "../ui"
@@ -76,6 +76,24 @@ function createMockCommandRegistry(): CommandRegistry {
   return registry
 }
 
+function renderableColor(renderable: unknown, key: "backgroundColor" | "borderColor" | "fg"): string | undefined {
+  if (!renderable) return undefined
+  const color = (renderable as Record<"backgroundColor" | "borderColor" | "fg", string | { toInts?: () => number[] } | undefined>)[key]
+  if (typeof color === "string" || color === undefined) return color
+  const [r, g, b] = color.toInts?.() ?? []
+  if (r === undefined || g === undefined || b === undefined) return undefined
+  return `#${[r, g, b].map((part) => part.toString(16).padStart(2, "0")).join("")}`
+}
+
+function renderableBorderStyle(renderable: unknown): string | undefined {
+  return (renderable as { borderStyle?: string } | undefined)?.borderStyle
+}
+
+function renderablePadding(renderable: unknown, key: "paddingTop" | "paddingBottom"): number | undefined {
+  const layoutNode = (renderable as { getLayoutNode?: () => { getComputedPadding(edge: number): number } } | undefined)?.getLayoutNode?.()
+  return layoutNode?.getComputedPadding(key === "paddingTop" ? Yoga.Edge.Top : Yoga.Edge.Bottom)
+}
+
 async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
   const chunks: string[] = []
   const originalWrite = process.stdout.write
@@ -110,6 +128,54 @@ describe("OpenTUI command e2e", () => {
     expect(output).toContain("◆ assistant hello text mode")
   })
 
+  test("headless question requests reject clearly", async () => {
+    const ui = await createAgentClientUi({ headless: true })
+
+    await expect(ui.askQuestions({
+      header: "Demo Questions",
+      questions: [{ id: "color", text: "Choose a color", options: [] }],
+    })).rejects.toThrow("Question prompts require interactive UI")
+  })
+
+  test("question overlay records option and custom typed answers", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({ renderer: testRenderer.renderer })
+
+    try {
+      const response = ui.askQuestions({
+        header: "Demo Questions",
+        questions: [
+          {
+            id: "color",
+            text: "Choose a color",
+            options: [
+              { id: "red", label: "Red" },
+              { id: "blue", label: "Blue" },
+            ],
+          },
+          { id: "snack", text: "Name a snack", options: [] },
+        ],
+      })
+
+      await testRenderer.flush()
+      expect(testRenderer.renderer.root.findDescendantById("question-overlay")).toBeTruthy()
+
+      testRenderer.mockInput.pressArrow("down")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.mockInput.typeText("pretzels")
+      testRenderer.mockInput.pressEnter()
+
+      await expect(response).resolves.toEqual({
+        answers: [
+          { questionId: "color", answer: "blue" },
+          { questionId: "snack", answer: "pretzels" },
+        ],
+      })
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("renders input bar below the content panels", async () => {
     const testRenderer = await createTestRenderer({ width: 100, height: 30 })
     const ui = await createAgentClientUi({
@@ -132,12 +198,130 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("renders cyber status theme without changing color theme", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      animationTheme: "cyber",
+      random: () => 0,
+    })
+
+    try {
+      ui.setStatus("prompting")
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("▰▱▱ scanning")
+      const inputCursor = testRenderer.renderer.root.findDescendantById("input-cursor")
+      expect(renderableColor(inputCursor, "fg")).toBe("#a78bfa")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("keeps input cursor regular under animation themes", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      animationTheme: "operational",
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("hello")
+      await testRenderer.flush()
+
+      expect(testRenderer.captureCharFrame()).toContain("hello█")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("renders themed dropdown loading text", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      animationTheme: "playful",
+      onFetchOptions: () => new Promise(() => {}),
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      expect(testRenderer.captureCharFrame()).toContain("󰇥 Loading options")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("renders themed tool burst status icons", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      animationTheme: "operational",
+    })
+
+    try {
+      ui.append({ kind: "tool", toolCallId: "read-1", toolKind: "read", toolStatus: "running", toolTitle: "Read src/ui.ts" })
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("󰏗")
+
+      ui.append({ kind: "tool", toolCallId: "read-1", toolKind: "read", toolStatus: "done", toolTitle: "Read src/ui.ts" })
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("󰄬")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("runtime animation theme command switches status rendering", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const registry = createMockCommandRegistry()
+    registry.addLocalCommand({
+      name: "/animation-theme",
+      description: "Switch animation/icon theme",
+      source: "local",
+      kind: "app",
+      options: [{ label: "cyber", value: "cyber", description: "cyber animation/icon theme" }],
+    })
+    const submissions: string[] = []
+    const ui = await createAgentClientUi({
+      registry,
+      renderer: testRenderer.renderer,
+      random: () => 0,
+    })
+    ui.onSubmit((prompt) => {
+      submissions.push(prompt)
+      if (prompt === "/animation-theme cyber") ui.setAnimationTheme("cyber")
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/animation-theme")
+      testRenderer.mockInput.pressEnter()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      expect(submissions).toEqual(["/animation-theme cyber"])
+      ui.setStatus("prompting")
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toMatch(/[▰▱]{3} scanning/)
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("renders configured agent label in session sidebar", async () => {
     const testRenderer = await createTestRenderer({ width: 100, height: 30 })
     const ui = await createAgentClientUi({
       registry: createMockCommandRegistry(),
       renderer: testRenderer.renderer,
       agentLabel: "opencode acp",
+      branchLabel: "feature/sidebar-path",
     })
 
     try {
@@ -145,8 +329,12 @@ describe("OpenTUI command e2e", () => {
 
       const frame = testRenderer.captureCharFrame()
       expect(frame).toContain("server  opencode acp")
+      expect(frame).toContain("cwd")
+      expect(frame).toContain(" feature/sidebar-path")
       expect(frame).not.toContain("server  mock-agent")
       expect(frame).not.toContain("mode    demo")
+      const sidebarCwd = testRenderer.renderer.root.findDescendantById("sidebar-cwd") as { plainText?: string } | undefined
+      expect(sidebarCwd?.plainText).toBe(process.cwd())
     } finally {
       ui.destroy()
     }
@@ -242,6 +430,72 @@ describe("OpenTUI command e2e", () => {
       await testRenderer.flush()
 
       expect(testRenderer.captureCharFrame()).toContain("hello█")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("input bar uses faint violet border while idle and strong violet while typing", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.flush()
+      const idleInput = testRenderer.renderer.root.findDescendantById("input-bar")
+      expect(renderableColor(idleInput, "backgroundColor")).toBe("#141414")
+      expect(renderableColor(idleInput, "borderColor")).toBe("#4a3f62")
+      expect(renderableBorderStyle(idleInput)).toBe("rounded")
+
+      await testRenderer.mockInput.typeText("hello")
+      await testRenderer.flush()
+
+      const activeInput = testRenderer.renderer.root.findDescendantById("input-bar")
+      expect(renderableColor(activeInput, "borderColor")).toBe("#a78bfa")
+      expect(testRenderer.captureCharFrame()).toContain("hello█")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("keeps transcript scrollbar hidden when content overflows", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      for (let i = 0; i < 40; i++) {
+        ui.append({ kind: "agent", text: `line ${i}` })
+      }
+      await testRenderer.flush()
+
+      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      expect(transcriptScroll?.verticalScrollBar.visible).toBe(false)
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("input cursor is a separate violet renderable from typed text", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("hello")
+      await testRenderer.flush()
+
+      const inputValue = testRenderer.renderer.root.findDescendantById("input-value")
+      const inputCursor = testRenderer.renderer.root.findDescendantById("input-cursor")
+
+      expect(renderableColor(inputValue, "fg")).toBe("#eeeeee")
+      expect(renderableColor(inputCursor, "fg")).toBe("#a78bfa")
     } finally {
       ui.destroy()
     }
@@ -354,7 +608,7 @@ describe("OpenTUI command e2e", () => {
   })
 
   test("renders ACP output transcript kinds", async () => {
-    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const testRenderer = await createTestRenderer({ width: 120, height: 40 })
     const ui = await createAgentClientUi({
       registry: createMockCommandRegistry(),
       renderer: testRenderer.renderer,
@@ -374,20 +628,178 @@ describe("OpenTUI command e2e", () => {
       await testRenderer.flush()
 
       const frame = testRenderer.captureCharFrame()
-      expect(frame).toContain("□ plan")
       expect(frame).toContain("[completed] Inspect workspace")
-      expect(frame).toContain("◇ thought")
-      expect(frame).toContain("◦ tool")
+      expect(frame).toContain("Thinking through mock output types.")
+      expect(frame).toContain("read completed: Found package metadata.")
       expect(frame).toContain("code ts")
       expect(frame).toContain("diff src/example.ts")
       expect(frame).toContain("- const before = 1")
       expect(frame).toContain("+ const after = 2")
-      expect(frame).toContain("↯ usage")
+      expect(frame).toContain("usage 53000/200000 tokens, 0.045 USD")
+      expect(frame).not.toContain("□ plan")
+      expect(frame).not.toContain("◇ thought")
+      expect(frame).not.toContain("◦ tool")
+      expect(frame).not.toContain("↯ usage")
 
       const lines = frame.split("\n")
       const codeHeaderIndex = lines.findIndex((line) => line.includes("code ts"))
       const codeContentIndex = lines.findIndex((line) => line.includes("const answer = 42"))
       expect(codeContentIndex).toBe(codeHeaderIndex + 1)
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("interactive transcript omits role gutters and renders event strip surfaces", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      ui.append({ kind: "user", text: "inspect repo" })
+      ui.append({ kind: "agent", text: "assistant prose" })
+      ui.append({ kind: "tool", text: "read completed" })
+      ui.append({ kind: "error", text: "failed to render" })
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("inspect repo")
+      expect(frame).toContain("assistant prose")
+      expect(frame).toContain("read completed")
+      expect(frame).toContain("failed to render")
+      expect(frame).not.toContain("● user")
+      expect(frame).not.toContain("◆ assistant")
+      expect(frame).not.toContain("◦ tool")
+      expect(frame).not.toContain("× error")
+
+      const assistantText = testRenderer.renderer.root.findDescendantById("transcript-node-2-text-block-2")
+      expect(assistantText).toBeInstanceOf(TextRenderable)
+
+      const userSurface = testRenderer.renderer.root.findDescendantById("transcript-node-1-event-block-1")
+      const userStrip = testRenderer.renderer.root.findDescendantById("transcript-node-1-strip-block-1")
+      const userBody = testRenderer.renderer.root.findDescendantById("transcript-node-1-event-body-block-1")
+      expect(userSurface).toBeDefined()
+      expect(userStrip).toBeDefined()
+      expect(renderableColor(userSurface, "backgroundColor")).toBe("#211a2e")
+      expect(renderableColor(userStrip, "borderColor")).toBe("#a78bfa")
+      expect((userStrip as { width?: number } | undefined)?.width).toBe(1)
+      expect(renderablePadding(userBody, "paddingTop")).toBe(1)
+      expect(renderablePadding(userBody, "paddingBottom")).toBe(1)
+
+      const toolSurface = testRenderer.renderer.root.findDescendantById("transcript-node-3-event-block-3")
+      const toolStrip = testRenderer.renderer.root.findDescendantById("transcript-node-3-strip-block-3")
+      const toolBody = testRenderer.renderer.root.findDescendantById("transcript-node-3-event-body-block-3")
+      expect(toolSurface).toBeDefined()
+      expect(toolStrip).toBeDefined()
+      expect(renderableColor(toolSurface, "backgroundColor")).toBe("#10191b")
+      expect(renderableColor(toolStrip, "borderColor")).toBe("#56b6c2")
+      expect((toolStrip as { width?: number } | undefined)?.width).toBe(1)
+      expect(renderablePadding(toolBody, "paddingTop")).toBe(1)
+      expect(renderablePadding(toolBody, "paddingBottom")).toBe(1)
+
+      const errorSurface = testRenderer.renderer.root.findDescendantById("transcript-node-4-event-block-4")
+      const errorStrip = testRenderer.renderer.root.findDescendantById("transcript-node-4-strip-block-4")
+      const errorBody = testRenderer.renderer.root.findDescendantById("transcript-node-4-event-body-block-4")
+      const errorText = testRenderer.renderer.root.findDescendantById("transcript-node-4-text-block-4")
+      expect(errorSurface).toBeDefined()
+      expect(errorStrip).toBeDefined()
+      expect(errorText).toBeInstanceOf(TextRenderable)
+      expect(renderableColor(errorSurface, "backgroundColor")).toBe("#2a1114")
+      expect(renderableColor(errorStrip, "borderColor")).toBe("#e06c75")
+      expect(renderableColor(errorText, "fg")).toBe("#e06c75")
+      expect((errorStrip as { width?: number } | undefined)?.width).toBe(1)
+      expect(renderablePadding(errorBody, "paddingTop")).toBe(1)
+      expect(renderablePadding(errorBody, "paddingBottom")).toBe(1)
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("renders tool lifecycle as one collapsed burst and toggles grouped history", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      ui.append({
+        kind: "tool",
+        text: "search pending: grep normalizeSessionUpdate",
+        toolCallId: "search-1",
+        toolKind: "search",
+        toolStatus: "pending",
+        toolTitle: "grep normalizeSessionUpdate",
+      })
+      ui.append({ kind: "tool", text: "in_progress", toolCallId: "search-1", toolStatus: "in_progress" })
+      ui.append({ kind: "tool", text: "completed", toolCallId: "search-1", toolStatus: "completed" })
+      ui.append({
+        kind: "tool",
+        text: "read pending: src/ui/transcript.ts",
+        toolCallId: "read-1",
+        toolKind: "read",
+        toolStatus: "pending",
+        toolTitle: "src/ui/transcript.ts",
+      })
+      ui.finishAgentMessage()
+      ui.append({
+        kind: "tool",
+        text: "shell pending: npm test",
+        toolCallId: "shell-1",
+        toolKind: "shell",
+        toolStatus: "pending",
+        toolTitle: "npm test",
+      })
+      await testRenderer.flush()
+
+      const collapsedFrame = testRenderer.captureCharFrame()
+      expect(collapsedFrame).toContain("Using tools")
+      expect(collapsedFrame).toContain("● src/ui/transcript.ts")
+      expect(collapsedFrame).toContain("read · 1")
+      expect(collapsedFrame).not.toContain("Ctrl+O tools")
+      expect(collapsedFrame).not.toContain("Ctrl+T tools")
+      expect(collapsedFrame).not.toContain("in_progress")
+      expect(collapsedFrame).not.toContain("search pending")
+
+      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
+      expect(transcriptScroll?.getChildren().length).toBe(2)
+
+      const toolBurstBody = testRenderer.renderer.root.findDescendantById("transcript-node-1-event-body-block-1") as { x?: number; y?: number } | undefined
+      const toolBurstSurface = testRenderer.renderer.root.findDescendantById("transcript-node-1-event-block-1")
+      const toolBurstStrip = testRenderer.renderer.root.findDescendantById("transcript-node-1-strip-block-1")
+      expect(renderableColor(toolBurstSurface, "backgroundColor")).toBe("#10191b")
+      expect(renderableColor(toolBurstStrip, "borderColor")).toBe("#56b6c2")
+      expect(renderablePadding(toolBurstBody, "paddingTop")).toBe(1)
+      expect(renderablePadding(toolBurstBody, "paddingBottom")).toBe(1)
+
+      const toolBurstSummary = testRenderer.renderer.root.findDescendantById("transcript-node-1-tool-burst-block-1-summary") as { x?: number; y?: number } | undefined
+      if (toolBurstSummary?.x === undefined || toolBurstSummary.y === undefined) throw new Error("Missing tool burst summary layout")
+
+      await testRenderer.mockMouse.moveTo(toolBurstSummary.x + 2, toolBurstSummary.y)
+      await testRenderer.flush()
+      expect(renderableColor(toolBurstSurface, "backgroundColor")).toBe("#16282b")
+
+      await testRenderer.mockMouse.moveTo(0, 0)
+      await testRenderer.flush()
+      expect(renderableColor(toolBurstSurface, "backgroundColor")).toBe("#10191b")
+
+      await testRenderer.mockMouse.click(toolBurstSummary.x + 2, toolBurstSummary.y)
+      await testRenderer.flush()
+
+      const expandedFrame = testRenderer.captureCharFrame()
+      expect(expandedFrame).toContain("Tool history")
+      expect(expandedFrame).toContain("2 calls")
+      expect(expandedFrame).toContain("search  done  grep normalizeSessionUpdate")
+      expect(expandedFrame).toContain("read    pending  src/ui/transcript.ts")
+      expect(expandedFrame).not.toContain("shell   pending  npm test")
+      testRenderer.mockInput.pressKey("o", { ctrl: true })
+      await testRenderer.flush()
+
+      const latestExpandedFrame = testRenderer.captureCharFrame()
+      expect(latestExpandedFrame).toContain("Tool history 1 call")
+      expect(latestExpandedFrame).toContain("shell   pending  npm test")
     } finally {
       ui.destroy()
     }
@@ -476,7 +888,9 @@ describe("OpenTUI command e2e", () => {
       const frame = testRenderer.captureCharFrame()
       expect(frame).toContain("stream-final-token")
       expect(frame).not.toContain("stream-old-token")
-      expect(frame.match(/◆ assistant/g)?.length ?? 0).toBe(1)
+      expect(frame).not.toContain("◆ assistant")
+      expect(frame.match(/stream-final-token/g)?.length ?? 0).toBe(1)
+      expect(testRenderer.renderer.root.findDescendantById("transcript-node-1-text-block-1")).toBeInstanceOf(TextRenderable)
     } finally {
       ui.destroy()
     }
@@ -591,10 +1005,7 @@ describe("OpenTUI command e2e", () => {
       ui.append({ kind: "agent", text: "first" })
       await testRenderer.flush()
 
-      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
-      const nodeBox = transcriptScroll?.getChildren()[0] as { getChildren(): unknown[] } | undefined
-      const row = nodeBox?.getChildren()[0] as { getChildren(): unknown[] } | undefined
-      const textRenderable = row?.getChildren()[1] as object | undefined
+      const textRenderable = testRenderer.renderer.root.findDescendantById("transcript-node-1-text-block-1") as object | undefined
       expect(textRenderable).toBeDefined()
       if (!textRenderable) return
 
@@ -658,10 +1069,7 @@ describe("OpenTUI command e2e", () => {
       ui.append({ kind: "agent", text: "first" })
       await testRenderer.flush()
 
-      const transcriptScroll = testRenderer.renderer.root.findDescendantById("transcript-scroll") as ScrollBoxRenderable | undefined
-      const nodeBox = transcriptScroll?.getChildren()[0] as { getChildren(): unknown[] } | undefined
-      const row = nodeBox?.getChildren()[0] as { getChildren(): unknown[] } | undefined
-      const textRenderable = row?.getChildren()[1] as object | undefined
+      const textRenderable = testRenderer.renderer.root.findDescendantById("transcript-node-1-text-block-1") as object | undefined
       expect(textRenderable).toBeDefined()
       if (!textRenderable) return
 
@@ -898,6 +1306,30 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("slash dropdown shares the user violet input family", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("/")
+      await testRenderer.flush()
+
+      const dropdown = testRenderer.renderer.root.findDescendantById("slash-dropdown")
+      const selectedRow = testRenderer.renderer.root.findDescendantById("slash-dropdown-selected-row")
+      const input = testRenderer.renderer.root.findDescendantById("input-bar")
+
+      expect(renderableColor(dropdown, "borderColor")).toBe("#a78bfa")
+      expect(renderableBorderStyle(dropdown)).toBe("rounded")
+      expect(renderableColor(selectedRow, "backgroundColor")).toBe("#a78bfa")
+      expect(renderableColor(input, "borderColor")).toBe("#a78bfa")
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("slash dropdown scrolls through many mock commands", async () => {
     const testRenderer = await createTestRenderer({ width: 100, height: 30 })
     const ui = await createAgentClientUi({
@@ -1036,7 +1468,28 @@ describe("OpenTUI command e2e", () => {
       expect(frame).toContain("/model")
       expect(frame).toContain("● starting")
       expect(frame).toContain("session")
-      expect(frame).toContain("/ commands")
+      expect(frame).toContain("● starting")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("ctrl-p palette keeps app accent instead of user violet", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+
+    try {
+      testRenderer.mockInput.pressKey("p", { ctrl: true })
+      await testRenderer.flush()
+
+      const palette = testRenderer.renderer.root.findDescendantById("command-palette")
+      const selectedRow = testRenderer.renderer.root.findDescendantById("command-palette-selected-row")
+
+      expect(renderableColor(palette, "borderColor")).toBe("#9d7cd8")
+      expect(renderableColor(selectedRow, "backgroundColor")).toBe("#9d7cd8")
     } finally {
       ui.destroy()
     }

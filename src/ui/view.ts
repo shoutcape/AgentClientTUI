@@ -12,8 +12,10 @@ export { opencodeTheme }
 export type InputBar = {
   prompt: string
   value?: string
+  cursor?: string
   promptColor: string
   valueColor?: string
+  cursorColor?: string
 }
 
 export type InputKey = {
@@ -31,15 +33,15 @@ export type InputKeyResult = {
 
 export type InputBarOptions = {
   cursorVisible?: boolean
+  cursor?: string
 }
 
 export function buildInputBar(value = "", options: InputBarOptions = {}): InputBar {
-  const displayValue = options.cursorVisible ? `${value}█` : value
-
   return {
     prompt: ">",
-    ...(displayValue ? { value: displayValue, valueColor: opencodeTheme.text } : {}),
-    promptColor: opencodeTheme.primary,
+    ...(value ? { value, valueColor: opencodeTheme.text } : {}),
+    ...(options.cursorVisible ? { cursor: options.cursor ?? "█", cursorColor: opencodeTheme.user } : {}),
+    promptColor: opencodeTheme.user,
   }
 }
 

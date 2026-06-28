@@ -42,7 +42,14 @@ describe("normalizeSessionUpdate", () => {
         kind: "read",
         status: "pending",
       },
-    })).toEqual({ type: "tool", text: "read pending: Reading package.json", toolCallId: "tool-1" })
+    })).toEqual({
+      type: "tool",
+      text: "read pending: Reading package.json",
+      toolCallId: "tool-1",
+      toolKind: "read",
+      toolStatus: "pending",
+      toolTitle: "Reading package.json",
+    })
 
     expect(normalizeSessionUpdate("session/update", {
       update: {
@@ -58,6 +65,7 @@ describe("normalizeSessionUpdate", () => {
       type: "tool",
       text: "completed: Found script test\ndiff /tmp/a.ts",
       toolCallId: "tool-1",
+      toolStatus: "completed",
       blocks: [
         { type: "text", text: "completed: Found script test" },
         { type: "diff", path: "/tmp/a.ts", oldText: "old", newText: "new" },
@@ -79,6 +87,7 @@ describe("normalizeSessionUpdate", () => {
       type: "tool",
       text: "completed:\ncode ts\nconst answer = 42",
       toolCallId: "tool-2",
+      toolStatus: "completed",
       blocks: [
         { type: "text", text: "completed:" },
         { type: "code", language: "ts", text: "const answer = 42" },
@@ -94,10 +103,10 @@ describe("normalizeSessionUpdate", () => {
         size: 200000,
         cost: { amount: 0.045, currency: "USD" },
       },
-    })).toEqual({ type: "usage", text: "usage 53000/200000 tokens, 0.045 USD" })
+    })).toEqual({ type: "metadata", text: "usage 53000/200000 tokens, 0.045 USD" })
   })
 
-  test("formats available command updates", () => {
+  test("does not normalize available command updates as transcript entries", () => {
     expect(normalizeSessionUpdate("session/update", {
       update: {
         sessionUpdate: "available_commands_update",
@@ -106,7 +115,7 @@ describe("normalizeSessionUpdate", () => {
           { name: "mode", description: "Switch mode" },
         ],
       },
-    })).toEqual({ type: "status", text: "commands updated (2)" })
+    })).toBeNull()
   })
 
   test("keeps legacy mock text chunks working", () => {

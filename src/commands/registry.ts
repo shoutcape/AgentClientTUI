@@ -45,9 +45,10 @@ export class CommandRegistry {
 
   searchSlash(query: string): CommandDescriptor[] {
     const serverCommands = this.acpCommands.filter((cmd) => (cmd.kind ?? "server") === "server")
+    const localSlashCommands = this.localCommands.filter((cmd) => (cmd.kind ?? "app") === "app" && cmd.name.startsWith("/"))
     const skills = this.getSkills()
     const skillsCommand = this.skillsCommand()
-    const baseCommands = [...serverCommands, ...this.configCommands]
+    const baseCommands = [...serverCommands, ...this.configCommands, ...localSlashCommands]
     if (skills.length > 0 && this.matches(skillsCommand, query)) {
       if (query.trim()) return this.filterCommands([...baseCommands, skillsCommand], query)
 
