@@ -246,6 +246,112 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("normal input navigates submitted prompt history and restores draft", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const submissions: string[] = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+    ui.onSubmit((prompt) => {
+      submissions.push(prompt)
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("first")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      await testRenderer.mockInput.typeText("second")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      await testRenderer.mockInput.typeText("draft")
+      await testRenderer.flush()
+
+      testRenderer.mockInput.pressArrow("up")
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("second█")
+
+      testRenderer.mockInput.pressArrow("up")
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("first█")
+
+      testRenderer.mockInput.pressArrow("down")
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("second█")
+
+      testRenderer.mockInput.pressArrow("down")
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("draft█")
+
+      expect(submissions).toEqual(["first", "second"])
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("editing while browsing prompt history exits history mode", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+    ui.onSubmit(() => {})
+
+    try {
+      await testRenderer.mockInput.typeText("first")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      await testRenderer.mockInput.typeText("draft")
+      await testRenderer.flush()
+
+      testRenderer.mockInput.pressArrow("up")
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("first█")
+
+      testRenderer.mockInput.pressKey("!")
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("first!█")
+      expect(testRenderer.captureCharFrame()).not.toContain("draft█")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("paste while browsing prompt history exits history mode", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+    ui.onSubmit(() => {})
+
+    try {
+      await testRenderer.mockInput.typeText("first")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      await testRenderer.mockInput.typeText("draft")
+      await testRenderer.flush()
+
+      testRenderer.mockInput.pressArrow("up")
+      await testRenderer.flush()
+
+      testRenderer.renderer.keyInput.processPaste(new TextEncoder().encode(" pasted"))
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("first pasted█")
+
+      testRenderer.mockInput.pressArrow("down")
+      await testRenderer.flush()
+      expect(testRenderer.captureCharFrame()).toContain("first pasted█")
+      expect(testRenderer.captureCharFrame()).not.toContain("draft█")
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("renders ACP output transcript kinds", async () => {
     const testRenderer = await createTestRenderer({ width: 120, height: 34 })
     const ui = await createAgentClientUi({
@@ -816,6 +922,32 @@ describe("OpenTUI command e2e", () => {
     }
   })
 
+  test("slash dropdown arrow keys still navigate commands instead of prompt history", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+    ui.onSubmit(() => {})
+
+    try {
+      await testRenderer.mockInput.typeText("remembered")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      await testRenderer.mockInput.typeText("/")
+      await testRenderer.flush()
+      testRenderer.mockInput.pressArrow("down")
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("/context")
+      expect(frame).not.toContain("remembered█")
+    } finally {
+      ui.destroy()
+    }
+  })
+
   test("slash dropdown keeps drilldown items inside its border", async () => {
     const testRenderer = await createTestRenderer({ width: 100, height: 30 })
     const ui = await createAgentClientUi({
@@ -904,6 +1036,99 @@ describe("OpenTUI command e2e", () => {
       expect(frame).toContain("● starting")
       expect(frame).toContain("session")
       expect(frame).toContain("/ commands")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("ctrl-p palette arrow keys still navigate commands instead of prompt history", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+    })
+    ui.onSubmit(() => {})
+
+    try {
+      await testRenderer.mockInput.typeText("remembered")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      testRenderer.mockInput.pressKey("p", { ctrl: true })
+      await testRenderer.flush()
+      testRenderer.mockInput.pressArrow("down")
+      await testRenderer.flush()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      const frame = testRenderer.captureCharFrame()
+      expect(frame).toContain("sonnet")
+      expect(frame).not.toContain("remembered█")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("local app commands are not added to prompt history", async () => {
+    const testRenderer = await createTestRenderer({ width: 100, height: 30 })
+    const registry = createMockCommandRegistry()
+    registry.addLocalCommand({ name: "Toggle Session Panel", description: "Show/hide sidebar", source: "local", kind: "app" })
+    const submissions: string[] = []
+    const ui = await createAgentClientUi({
+      registry,
+      renderer: testRenderer.renderer,
+    })
+    ui.onSubmit((prompt) => {
+      submissions.push(prompt)
+    })
+
+    try {
+      testRenderer.mockInput.pressKey("p", { ctrl: true })
+      await testRenderer.flush()
+      await testRenderer.mockInput.typeText("Toggle")
+      await testRenderer.flush()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      testRenderer.mockInput.pressArrow("up")
+      await testRenderer.flush()
+
+      expect(submissions).toEqual(["Toggle Session Panel"])
+      expect(testRenderer.captureCharFrame()).not.toContain("Toggle Session Panel█")
+    } finally {
+      ui.destroy()
+    }
+  })
+
+  test("slash commands are not added to prompt history", async () => {
+    const testRenderer = await createTestRenderer({ width: 120, height: 34 })
+    const submissions: string[] = []
+    const ui = await createAgentClientUi({
+      registry: createMockCommandRegistry(),
+      renderer: testRenderer.renderer,
+      onFetchOptions: async () => [{ label: "sonnet", value: "claude-sonnet" }],
+    })
+    ui.onSubmit((prompt) => {
+      submissions.push(prompt)
+    })
+
+    try {
+      await testRenderer.mockInput.typeText("remembered")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      await testRenderer.mockInput.typeText("/")
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+      testRenderer.mockInput.pressEnter()
+      await testRenderer.flush()
+
+      testRenderer.mockInput.pressArrow("up")
+      await testRenderer.flush()
+
+      expect(submissions).toEqual(["remembered", "/model claude-sonnet"])
+      expect(testRenderer.captureCharFrame()).toContain("remembered█")
+      expect(testRenderer.captureCharFrame()).not.toContain("/model claude-sonnet█")
     } finally {
       ui.destroy()
     }
